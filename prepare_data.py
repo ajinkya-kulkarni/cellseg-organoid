@@ -21,9 +21,7 @@ from scipy.io import savemat
 from skimage.segmentation import relabel_sequential
 from tqdm import tqdm
 
-DEFAULT_ANNOTATIONS_ZIP = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Raw_Data/Annotations.zip"
-DEFAULT_TEST_IMG_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Dataset/Test/Images"
-DEFAULT_TEST_MASK_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Dataset/Test/Masks"
+DEFAULT_SOURCE_ZIP = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData-All.zip"
 DEFAULT_OUTPUT_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData-256"
 
 PATCH_SIZE = 256
@@ -247,63 +245,45 @@ def add_image_entry(
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--annotations-zip", default=DEFAULT_ANNOTATIONS_ZIP)
-    parser.add_argument("--test-img-dir", default=DEFAULT_TEST_IMG_DIR)
-    parser.add_argument("--test-mask-dir", default=DEFAULT_TEST_MASK_DIR)
+    parser.add_argument("--source-zip", default=DEFAULT_SOURCE_ZIP,
+                        help="Path to zip containing Images/ and Masks/ subdirectories")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    annotations_zip = Path(args.annotations_zip)
-    test_img_dir = Path(args.test_img_dir)
-    test_mask_dir = Path(args.test_mask_dir)
+    source_zip = Path(args.source_zip)
     output_dir = Path(args.output_dir)
 
-    for path, description in [
-        (annotations_zip, "annotations zip"),
-        (test_img_dir, "test image directory"),
-        (test_mask_dir, "test mask directory"),
-    ]:
-        if not path.exists():
-            raise FileNotFoundError(f"Missing {description}: {path}")
+    if not source_zip.exists():
+        raise FileNotFoundError(f"Missing source zip: {source_zip}")
 
     if output_dir.exists():
         print(f"Removing existing {output_dir}...")
         shutil.rmtree(output_dir)
 
-    print("Extracting Annotations.zip...")
-    with zipfile.ZipFile(annotations_zip) as z:
-        z.extractall(output_dir)
-    annot_dir = output_dir / "Annotations"
+    extract_dir = output_dir / "_extracted"
+    print(f"Extracting {source_zip.name}...")
+    with zipfile.ZipFile(source_zip) as z:
+        z.extractall(extract_dir)
 
     images = []
     missing_masks = []
 
-    for img_path in sorted((annot_dir / "Images").glob("*.tif")):
+    for img_path in sorted((extract_dir / "Images").glob("*.tif")):
         stem = img_path.stem
-        mask_path = annot_dir / "Masks" / img_path.name.replace(".tif", "_mask.tif")
+        mask_path = extract_dir / "Masks" / f"{stem}_mask.tif"
         if mask_path.exists():
-            image_source = f"{annotations_zip}::Annotations/Images/{img_path.name}"
-            mask_source = f"{annotations_zip}::Annotations/Masks/{mask_path.name}"
             add_image_entry(
                 images,
                 stem,
                 img_path,
                 mask_path,
-                "annotations",
-                image_source,
-                mask_source,
+                "source_zip",
+                image_source=f"{source_zip}::{img_path.name}",
+                mask_source=f"{source_zip}::{mask_path.name}",
             )
-        else:
-            missing_masks.append((img_path, mask_path))
-
-    for img_path in sorted(test_img_dir.glob("*.tif")):
-        stem = img_path.stem
-        mask_path = test_mask_dir / img_path.name.replace(".tif", "_mask.tif")
-        if mask_path.exists():
-            add_image_entry(images, stem, img_path, mask_path, "original_test")
         else:
             missing_masks.append((img_path, mask_path))
 
@@ -409,7 +389,7 @@ def main():
     with (output_dir / "split_summary.json").open("w") as f:
         json.dump(summary, f, indent=2)
 
-    shutil.rmtree(annot_dir)
+    shutil.rmtree(extract_dir)
     print(f"\nDone. Dataset saved to {output_dir}")
 
 
