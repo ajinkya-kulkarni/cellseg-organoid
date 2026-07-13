@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Stratified image-level split of 190 original images, then patch to 256x256.
+"""Create a 256x256 OrganoIDNetData patch dataset.
 
-Overwrites OrganoIDNetData-256 with a properly stratified dataset.
-
-Sources:
-  - 180 annotations from Annotations.zip
-  - 10 test images from Dataset/Test/
-
-Split: stratified by species+donor, systematic by timepoint (70/15/15).
+This pools the original annotations and original test images into one image-level
+source set, creates a new 70/15/15 split stratified by organoid-content
+properties, then extracts 256x256 patches. Empty patches are kept so validation
+and test metrics include background-only behavior.
 """
 
-import os
-
-import zipfile
+import argparse
+import csv
+import json
 import shutil
+import zipfile
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import cv2
@@ -22,23 +21,20 @@ from scipy.io import savemat
 from skimage.segmentation import relabel_sequential
 from tqdm import tqdm
 
-ANNOTATIONS_ZIP = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Raw_Data/Annotations.zip"
-TEST_IMG_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Dataset/Test/Images"
-TEST_MASK_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Dataset/Test/Masks"
-OUTPUT_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData-256"
+DEFAULT_ANNOTATIONS_ZIP = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Raw_Data/Annotations.zip"
+DEFAULT_TEST_IMG_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Dataset/Test/Images"
+DEFAULT_TEST_MASK_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData/Dataset/Test/Masks"
+DEFAULT_OUTPUT_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData-256"
 
 PATCH_SIZE = 256
 TRAIN_RATIO = 0.70
 VAL_RATIO = 0.15
 TEST_RATIO = 0.15
 
+COUNT_BINS = 3
+FG_BINS = 3
+AREA_BINS = 2
 SEED = 42
-
-
-def parse_image_name(name):
-    name = name.replace("Test_", "")
-    parts = name.split("_")
-    return parts[0], parts[1], parts[2]
 
 
 def patch_starts(dim_size):
@@ -50,6 +46,15 @@ def patch_starts(dim_size):
     return starts
 
 
+def read_mask(mask_path):
+    mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
+    if mask is None:
+        raise RuntimeError(f"Could not read mask: {mask_path}")
+    if mask.ndim == 3:
+        mask = mask[..., 0]
+    return mask
+
+
 def clean_mask(mask):
     mask = mask.copy()
     mask[mask < 0] = 0
@@ -57,100 +62,301 @@ def clean_mask(mask):
     return mask.astype(np.int32)
 
 
+def image_properties(mask_path):
+    mask = clean_mask(read_mask(mask_path))
+    organoid_count = int(mask.max())
+    instance_areas = np.bincount(mask.ravel())[1:]
+    median_instance_area = float(np.median(instance_areas)) if organoid_count else 0.0
+    return organoid_count, float((mask > 0).mean()), median_instance_area
+
+
+def quantile_bins(values, n_bins):
+    if len(values) == 0:
+        return []
+    if n_bins <= 1:
+        return [0] * len(values)
+
+    edges = np.quantile(values, np.linspace(0, 1, n_bins + 1)[1:-1])
+    edges = np.unique(edges)
+    return np.digitize(values, edges, right=True).astype(int).tolist()
+
+
+def add_strata(images):
+    count_values = np.log1p([img["organoid_count"] for img in images])
+    fg_values = np.array([img["fg_fraction"] for img in images])
+    area_values = np.log1p([img["median_instance_area"] for img in images])
+    count_bins = quantile_bins(count_values, COUNT_BINS)
+    fg_bins = quantile_bins(fg_values, FG_BINS)
+    area_bins = quantile_bins(area_values, AREA_BINS)
+
+    stratified = []
+    for img, count_bin, fg_bin, area_bin in zip(
+        images, count_bins, fg_bins, area_bins
+    ):
+        entry = dict(img)
+        entry["count_bin"] = int(count_bin)
+        entry["fg_bin"] = int(fg_bin)
+        entry["area_bin"] = int(area_bin)
+        entry["stratum"] = f"count{count_bin}_fg{fg_bin}_area{area_bin}"
+        stratified.append(entry)
+    return stratified
+
+
+def rounded_count(n, ratio):
+    return int(np.floor(n * ratio + 0.5))
+
+
+def stratified_take(groups, target_count):
+    remaining_total = sum(len(entries) for entries in groups.values())
+    target_count = min(target_count, remaining_total)
+    if target_count <= 0:
+        return []
+
+    ratio = target_count / remaining_total
+    allocations = {}
+    remainders = []
+    for key in sorted(groups):
+        exact = len(groups[key]) * ratio
+        base = min(len(groups[key]), int(np.floor(exact)))
+        allocations[key] = base
+        remainders.append((exact - base, key))
+
+    current = sum(allocations.values())
+    for _, key in sorted(remainders, key=lambda item: (-item[0], item[1])):
+        if current >= target_count:
+            break
+        if allocations[key] < len(groups[key]):
+            allocations[key] += 1
+            current += 1
+
+    selected = []
+    for key in sorted(groups):
+        take = allocations[key]
+        selected.extend(groups[key][:take])
+        groups[key] = groups[key][take:]
+    return selected
+
+
 def split_image_list(images):
-    from collections import defaultdict
+    entries = add_strata(images)
+    rng = np.random.default_rng(SEED)
 
     groups = defaultdict(list)
-    for img_name, img_path, mask_path in images:
-        s, d, t = parse_image_name(img_name)
-        time_val = int(t.rstrip("h"))
-        groups[f"{s}_{d}"].append((time_val, img_name, img_path, mask_path))
+    for entry in entries:
+        groups[entry["stratum"]].append(entry)
+    for group_entries in groups.values():
+        rng.shuffle(group_entries)
 
-    rng = np.random.default_rng(SEED)
-    train, val, test = [], [], []
+    n_total = len(entries)
+    n_test = rounded_count(n_total, TEST_RATIO)
+    n_val = rounded_count(n_total, VAL_RATIO)
 
-    for key in sorted(groups):
-        entries = sorted(groups[key], key=lambda x: x[0])
-        n = len(entries)
-        n_test = max(1, round(n * TEST_RATIO))
-        n_val = max(1, round(n * VAL_RATIO))
-        n_train = n - n_val - n_test
+    test = stratified_take(groups, n_test)
+    val = stratified_take(groups, n_val)
+    train = [entry for key in sorted(groups) for entry in groups[key]]
 
-        if n_train <= 0:
-            n_val = max(1, int(n * VAL_RATIO))
-            n_test = max(1, int(n * TEST_RATIO))
-            n_train = n - n_val - n_test
-            if n_train <= 0:
-                n_val = 1
-                n_test = 1
-                n_train = n - 2
+    return (
+        sorted(train, key=lambda entry: entry["stem"]),
+        sorted(val, key=lambda entry: entry["stem"]),
+        sorted(test, key=lambda entry: entry["stem"]),
+    )
 
-        indices = np.array(list(range(n)))
-        rng.shuffle(indices)
 
-        test_idx = set(indices[:n_test].tolist())
-        val_idx = set(indices[n_test : n_test + n_val].tolist())
+def distribution(values):
+    if not values:
+        return {"min": None, "q25": None, "median": None, "q75": None, "max": None}
+    quantiles = np.quantile(values, [0, 0.25, 0.5, 0.75, 1])
+    return {
+        "min": float(quantiles[0]),
+        "q25": float(quantiles[1]),
+        "median": float(quantiles[2]),
+        "q75": float(quantiles[3]),
+        "max": float(quantiles[4]),
+    }
 
-        for i in range(n):
-            if i in test_idx:
-                test.append(entries[i])
-            elif i in val_idx:
-                val.append(entries[i])
-            else:
-                train.append(entries[i])
 
-    return train, val, test
+def split_summary(entries):
+    return {
+        "source_images": len(entries),
+        "organoid_count": distribution([entry["organoid_count"] for entry in entries]),
+        "foreground_fraction": distribution([entry["fg_fraction"] for entry in entries]),
+        "median_instance_area": distribution(
+            [entry["median_instance_area"] for entry in entries]
+        ),
+        "strata": dict(sorted(Counter(entry["stratum"] for entry in entries).items())),
+    }
+
+
+def write_manifest(output_dir, splits):
+    manifest_path = output_dir / "split_manifest.csv"
+    fieldnames = [
+        "split",
+        "stem",
+        "source",
+        "organoid_count",
+        "foreground_fraction",
+        "median_instance_area",
+        "count_bin",
+        "fg_bin",
+        "area_bin",
+        "stratum",
+        "image_source",
+        "mask_source",
+    ]
+    with manifest_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for split_name, entries in splits.items():
+            for entry in entries:
+                writer.writerow(
+                    {
+                        "split": split_name,
+                        "stem": entry["stem"],
+                        "source": entry["source"],
+                        "organoid_count": entry["organoid_count"],
+                        "foreground_fraction": f"{entry['fg_fraction']:.8f}",
+                        "median_instance_area": f"{entry['median_instance_area']:.3f}",
+                        "count_bin": entry["count_bin"],
+                        "fg_bin": entry["fg_bin"],
+                        "area_bin": entry["area_bin"],
+                        "stratum": entry["stratum"],
+                        "image_source": entry["image_source"],
+                        "mask_source": entry["mask_source"],
+                    }
+                )
+
+
+def add_image_entry(
+    images, stem, img_path, mask_path, source, image_source=None, mask_source=None
+):
+    organoid_count, fg_fraction, median_instance_area = image_properties(mask_path)
+    images.append(
+        {
+            "stem": stem,
+            "img_path": str(img_path),
+            "mask_path": str(mask_path),
+            "image_source": str(image_source or img_path),
+            "mask_source": str(mask_source or mask_path),
+            "source": source,
+            "organoid_count": organoid_count,
+            "fg_fraction": fg_fraction,
+            "median_instance_area": median_instance_area,
+        }
+    )
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--annotations-zip", default=DEFAULT_ANNOTATIONS_ZIP)
+    parser.add_argument("--test-img-dir", default=DEFAULT_TEST_IMG_DIR)
+    parser.add_argument("--test-mask-dir", default=DEFAULT_TEST_MASK_DIR)
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+    return parser.parse_args()
 
 
 def main():
-    if os.path.exists(OUTPUT_DIR):
-        print(f"Removing existing {OUTPUT_DIR}...")
-        shutil.rmtree(OUTPUT_DIR)
+    args = parse_args()
+    annotations_zip = Path(args.annotations_zip)
+    test_img_dir = Path(args.test_img_dir)
+    test_mask_dir = Path(args.test_mask_dir)
+    output_dir = Path(args.output_dir)
+
+    for path, description in [
+        (annotations_zip, "annotations zip"),
+        (test_img_dir, "test image directory"),
+        (test_mask_dir, "test mask directory"),
+    ]:
+        if not path.exists():
+            raise FileNotFoundError(f"Missing {description}: {path}")
+
+    if output_dir.exists():
+        print(f"Removing existing {output_dir}...")
+        shutil.rmtree(output_dir)
 
     print("Extracting Annotations.zip...")
-    with zipfile.ZipFile(ANNOTATIONS_ZIP) as z:
-        z.extractall(OUTPUT_DIR)
-    annot_dir = os.path.join(OUTPUT_DIR, "Annotations")
+    with zipfile.ZipFile(annotations_zip) as z:
+        z.extractall(output_dir)
+    annot_dir = output_dir / "Annotations"
 
     images = []
+    missing_masks = []
 
-    for f in sorted(os.listdir(os.path.join(annot_dir, "Images"))):
-        stem = Path(f).stem
-        img_path = os.path.join(annot_dir, "Images", f)
-        mask_path = os.path.join(annot_dir, "Masks", f.replace(".tif", "_mask.tif"))
-        if os.path.exists(mask_path):
-            images.append((stem, img_path, mask_path))
+    for img_path in sorted((annot_dir / "Images").glob("*.tif")):
+        stem = img_path.stem
+        mask_path = annot_dir / "Masks" / img_path.name.replace(".tif", "_mask.tif")
+        if mask_path.exists():
+            image_source = f"{annotations_zip}::Annotations/Images/{img_path.name}"
+            mask_source = f"{annotations_zip}::Annotations/Masks/{mask_path.name}"
+            add_image_entry(
+                images,
+                stem,
+                img_path,
+                mask_path,
+                "annotations",
+                image_source,
+                mask_source,
+            )
+        else:
+            missing_masks.append((img_path, mask_path))
 
-    for f in sorted(os.listdir(TEST_IMG_DIR)):
-        stem = Path(f).stem
-        mask_name = f.replace(".tif", "_mask.tif")
-        img_path = os.path.join(TEST_IMG_DIR, f)
-        mask_path = os.path.join(TEST_MASK_DIR, mask_name)
-        if os.path.exists(mask_path):
-            images.append((stem, img_path, mask_path))
+    for img_path in sorted(test_img_dir.glob("*.tif")):
+        stem = img_path.stem
+        mask_path = test_mask_dir / img_path.name.replace(".tif", "_mask.tif")
+        if mask_path.exists():
+            add_image_entry(images, stem, img_path, mask_path, "original_test")
+        else:
+            missing_masks.append((img_path, mask_path))
+
+    if missing_masks:
+        examples = "\n".join(
+            f"  image={img_path} mask={mask_path}" for img_path, mask_path in missing_masks[:20]
+        )
+        raise RuntimeError(f"Missing masks for {len(missing_masks)} images:\n{examples}")
 
     print(f"Total images collected: {len(images)}")
 
     train_imgs, val_imgs, test_imgs = split_image_list(images)
-    print(f"Split: Train={len(train_imgs)}, Val={len(val_imgs)}, Test={len(test_imgs)}")
+    splits = {
+        "Training": train_imgs,
+        "Validation": val_imgs,
+        "Test": test_imgs,
+    }
+    write_manifest(output_dir, splits)
 
-    for split_name, split_imgs in [
-        ("Training", train_imgs),
-        ("Validation", val_imgs),
-        ("Test", test_imgs),
-    ]:
-        out_img_dir = os.path.join(OUTPUT_DIR, split_name, "images")
-        out_label_dir = os.path.join(OUTPUT_DIR, split_name, "labels")
-        os.makedirs(out_img_dir, exist_ok=True)
-        os.makedirs(out_label_dir, exist_ok=True)
+    print(
+        f"Split: Train={len(train_imgs)}, Val={len(val_imgs)}, Test={len(test_imgs)}"
+    )
+
+    summary = {
+        "patch_size": PATCH_SIZE,
+        "ratios": {"train": TRAIN_RATIO, "validation": VAL_RATIO, "test": TEST_RATIO},
+        "stratification": {
+            "properties": [
+                "source-image organoid_count",
+                "source-image foreground_fraction",
+                "source-image median_instance_area",
+            ],
+            "count_bins": COUNT_BINS,
+            "foreground_fraction_bins": FG_BINS,
+            "median_instance_area_bins": AREA_BINS,
+        },
+        "splits": {split_name: split_summary(entries) for split_name, entries in splits.items()},
+    }
+
+    for split_name, split_imgs in splits.items():
+        out_img_dir = output_dir / split_name / "images"
+        out_label_dir = output_dir / split_name / "labels"
+        out_img_dir.mkdir(parents=True, exist_ok=True)
+        out_label_dir.mkdir(parents=True, exist_ok=True)
 
         total_patches = 0
-        skipped_global = 0
+        empty_patches = 0
 
-        for _, stem, img_path, mask_path in tqdm(
-            split_imgs, desc=f"Patching {split_name}"
-        ):
-            img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+        for entry in tqdm(split_imgs, desc=f"Patching {split_name}"):
+            stem = entry["stem"]
+            img = cv2.imread(entry["img_path"], cv2.IMREAD_UNCHANGED)
+            if img is None:
+                raise RuntimeError(f"Could not read image: {entry['img_path']}")
             if img.ndim == 2:
                 img = np.stack([img] * 3, axis=-1)
             elif img.shape[2] == 4:
@@ -158,13 +364,11 @@ def main():
             else:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            mask = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
-            H, W = mask.shape
+            mask = read_mask(entry["mask_path"])
+            height, width = mask.shape
 
-            x_starts = patch_starts(W)
-            y_starts = patch_starts(H)
-
-            n_skipped = 0
+            x_starts = patch_starts(width)
+            y_starts = patch_starts(height)
 
             for y in y_starts:
                 for x in x_starts:
@@ -175,35 +379,38 @@ def main():
                         continue
 
                     mask_patch = clean_mask(mask_patch)
-
                     if mask_patch.max() == 0:
-                        n_skipped += 1
-                        continue
+                        empty_patches += 1
 
                     type_map = (mask_patch > 0).astype(np.int32)
-
                     patch_name = f"{stem}_x{x}_y{y}"
 
                     cv2.imwrite(
-                        os.path.join(out_img_dir, f"{patch_name}.png"),
+                        str(out_img_dir / f"{patch_name}.png"),
                         cv2.cvtColor(img_patch, cv2.COLOR_RGB2BGR),
                     )
 
                     savemat(
-                        os.path.join(out_label_dir, f"{patch_name}.mat"),
+                        str(out_label_dir / f"{patch_name}.mat"),
                         {"inst": mask_patch, "type": type_map},
                     )
 
                     total_patches += 1
 
-            skipped_global += n_skipped
+        split_info = summary["splits"][split_name]
+        split_info["patches"] = total_patches
+        split_info["empty_patches"] = empty_patches
+        split_info["nonempty_patches"] = total_patches - empty_patches
 
         print(
-            f"  {split_name}: {len(os.listdir(out_img_dir))} patches, {skipped_global} skipped (empty)"
+            f"  {split_name}: {total_patches} patches, {empty_patches} empty included"
         )
 
+    with (output_dir / "split_summary.json").open("w") as f:
+        json.dump(summary, f, indent=2)
+
     shutil.rmtree(annot_dir)
-    print(f"\nDone. Dataset saved to {OUTPUT_DIR}")
+    print(f"\nDone. Dataset saved to {output_dir}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,136 @@
+# cellseg-organoid
+
+Cellpose-style organoid segmentation experiments using `cellseg-models-pytorch` on a regenerated 256x256 patch version of OrganoIDNetData.
+
+This repo is meant for training and evaluating an instance segmentation model on PDAC organoid microscopy images. The data preparation script pools the original training, validation, and test sources to create a new image-level split balanced by organoid-content properties.
+
+## References
+
+This work is based on the OrganoIDNet/OrganoIDNetData publications and dataset:
+
+- [OrganoIDNet: a deep learning tool for identification of therapeutic effects in PDAC organoid-PBMC co-cultures from time-resolved imaging data](https://link.springer.com/article/10.1007/s13402-024-00958-2)
+- [A Curated Cell Life Imaging Dataset of Immune-enriched Pancreatic Cancer Organoids with Pre-trained AI Models](https://www.nature.com/articles/s41597-024-03631-3)
+
+If you use the dataset or reproduce dataset-derived experiments, cite the relevant original publication and follow the upstream dataset terms.
+
+## Setup
+
+Install dependencies with `uv`:
+
+```bash
+uv sync
+```
+
+Or use the existing virtual environment if already created:
+
+```bash
+source .venv/bin/activate
+```
+
+## Data Preparation
+
+`prepare_data.py` creates a new 256x256 patch dataset. It pools:
+
+- Raw annotated images from `Raw_Data/Annotations.zip`
+- Original full-field test images and masks from `Dataset/Test`
+
+The new split is image-level, so patches from the same source image stay in one split. Stratification uses source-image organoid properties only:
+
+- Organoid instance count
+- Foreground mask fraction
+- Median instance area
+
+Empty patches are kept. This is intentional so validation and test metrics include background-only behavior.
+
+Run with defaults matching the local OrganoIDNetData layout:
+
+```bash
+uv run python prepare_data.py
+```
+
+Or pass explicit paths:
+
+```bash
+uv run python prepare_data.py \
+  --annotations-zip /path/to/OrganoIDNetData/Raw_Data/Annotations.zip \
+  --test-img-dir /path/to/OrganoIDNetData/Dataset/Test/Images \
+  --test-mask-dir /path/to/OrganoIDNetData/Dataset/Test/Masks \
+  --output-dir /path/to/OrganoIDNetData-256
+```
+
+Warning: `prepare_data.py` removes and recreates the output directory.
+
+Generated layout:
+
+```text
+OrganoIDNetData-256/
+  Training/
+    images/
+    labels/
+  Validation/
+    images/
+    labels/
+  Test/
+    images/
+    labels/
+  split_manifest.csv
+  split_summary.json
+```
+
+Labels are MATLAB `.mat` files with:
+
+- `inst`: integer instance labels
+- `type`: binary foreground/background labels
+
+## Training
+
+Train on the regenerated dataset:
+
+```bash
+uv run python train.py --data-root /path/to/OrganoIDNetData-256 --epochs 100 --batch-size 16
+```
+
+Useful development shortcut:
+
+```bash
+uv run python train.py --data-root /path/to/OrganoIDNetData-256 --epochs 5 --sub-size 128
+```
+
+Training uses the full validation split. It no longer truncates validation to the first 32 patches.
+
+Outputs:
+
+- `models/last.pt`
+- `models/best.pt`
+- `output/viz_epoch_*.png`
+
+## Evaluation
+
+Evaluate the best checkpoint on all test patches:
+
+```bash
+uv run python evaluate.py --data-root /path/to/OrganoIDNetData-256
+```
+
+Or choose a checkpoint explicitly:
+
+```bash
+uv run python evaluate.py --data-root /path/to/OrganoIDNetData-256 --ckpt models/best.pt
+```
+
+Outputs:
+
+- `output/metrics.csv`
+- `output/pred_*.png`
+
+For empty ground-truth patches, perfect empty predictions score Dice and IoU as `1.0`.
+
+## Notes
+
+This is a regenerated split, not the original benchmark split from OrganoIDNetData. It intentionally mixes the original training, validation, and test sources before creating a new stratified dataset.
+
+The repository license applies to this code. Dataset usage is governed by the upstream OrganoIDNetData release and associated publications.
+
+## License
+
+Apache License 2.0. See `LICENSE`.

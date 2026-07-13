@@ -50,9 +50,13 @@ def predict(model, img_rgb):
 
 def dice_iou(pred_mask, gt_mask):
     inter = (pred_mask & gt_mask).sum()
-    dice = 2 * inter / (pred_mask.sum() + gt_mask.sum() + 1e-8)
-    iou = inter / ((pred_mask | gt_mask).sum() + 1e-8)
-    return dice.item(), iou.item()
+    denominator = pred_mask.sum() + gt_mask.sum()
+    union = (pred_mask | gt_mask).sum()
+    if denominator == 0:
+        return 1.0, 1.0
+    dice = 2 * inter / (denominator + 1e-8)
+    iou = inter / (union + 1e-8)
+    return float(dice), float(iou)
 
 
 def match_instances(pred_inst, gt_inst):

@@ -83,10 +83,13 @@ class OrganoidDataset(Dataset):
 
 def dice_score(logits, target, eps=1e-8):
     pred = logits.argmax(dim=1)
-    intersection = ((pred == 1) & (target == 1)).sum().float()
-    return (
-        2.0 * intersection / (pred.sum().float() + target.sum().float() + eps)
-    ).item()
+    pred_fg = pred == 1
+    target_fg = target == 1
+    intersection = (pred_fg & target_fg).sum().float()
+    denominator = pred_fg.sum().float() + target_fg.sum().float()
+    if denominator.item() == 0:
+        return 1.0
+    return (2.0 * intersection / (denominator + eps)).item()
 
 
 @torch.no_grad()
@@ -183,7 +186,6 @@ def main():
 
     if sub_size is not None:
         train_ds = Subset(train_ds, range(min(sub_size, len(train_ds))))
-    val_ds = Subset(val_ds, range(min(32, len(val_ds))))
 
     train_loader = DataLoader(train_ds, BATCH_SIZE, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_ds, BATCH_SIZE, shuffle=False, num_workers=4)
