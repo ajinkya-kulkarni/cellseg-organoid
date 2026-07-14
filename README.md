@@ -94,6 +94,12 @@ Useful development shortcut:
 uv run python train.py --data-root /path/to/OrganoIDNetData-256 --epochs 5 --sub-size 128
 ```
 
+Adjust DataLoader workers if needed (default is 4):
+
+```bash
+uv run python train.py --data-root /path/to/OrganoIDNetData-256 --num-workers 8
+```
+
 Training uses the full validation split.
 
 Note: `train.py` removes and recreates the `output/` and `models/` directories before starting, so old checkpoints and visualizations are cleared.
