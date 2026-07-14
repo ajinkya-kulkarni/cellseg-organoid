@@ -29,12 +29,12 @@ source .venv/bin/activate
 
 ## Data Preparation
 
-`prepare_data.py` creates a new 256x256 patch dataset. It pools:
+`prepare_data.py` creates a new 256x256 patch dataset from a source zip containing paired full-field images and instance masks:
 
-- Raw annotated images from `Raw_Data/Annotations.zip`
-- Original full-field test images and masks from `Dataset/Test`
+- `Images/*.tif` — raw microscopy images
+- `Masks/{stem}_mask.tif` — corresponding instance masks
 
-The new split is image-level, so patches from the same source image stay in one split. Stratification uses source-image organoid properties only:
+It pools all sources, creates a new 70/15/15 image-level split, and extracts 256x256 patches. Patches from the same source image stay in one split. Stratification uses source-image organoid properties only:
 
 - Organoid instance count
 - Foreground mask fraction
@@ -42,7 +42,7 @@ The new split is image-level, so patches from the same source image stay in one 
 
 Empty patches are kept. This is intentional so validation and test metrics include background-only behavior.
 
-Run with defaults matching the local OrganoIDNetData layout:
+Run with defaults (expects `OrganoIDNetData-All.zip` on the Desktop and writes `OrganoIDNetData-256`):
 
 ```bash
 uv run python prepare_data.py
@@ -52,9 +52,7 @@ Or pass explicit paths:
 
 ```bash
 uv run python prepare_data.py \
-  --annotations-zip /path/to/OrganoIDNetData/Raw_Data/Annotations.zip \
-  --test-img-dir /path/to/OrganoIDNetData/Dataset/Test/Images \
-  --test-mask-dir /path/to/OrganoIDNetData/Dataset/Test/Masks \
+  --source-zip /path/to/OrganoIDNetData-All.zip \
   --output-dir /path/to/OrganoIDNetData-256
 ```
 
@@ -96,7 +94,7 @@ Useful development shortcut:
 uv run python train.py --data-root /path/to/OrganoIDNetData-256 --epochs 5 --sub-size 128
 ```
 
-Training uses the full validation split. It no longer truncates validation to the first 32 patches.
+Training uses the full validation split.
 
 Outputs:
 
