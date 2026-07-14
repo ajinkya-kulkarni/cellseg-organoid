@@ -151,6 +151,8 @@ def main():
 
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
+    if MODELS_DIR.exists():
+        shutil.rmtree(MODELS_DIR)
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(MODELS_DIR, exist_ok=True)
 
