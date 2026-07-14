@@ -6,4 +6,5 @@ __pycache__/
 .env
 output/
 models/
-train.log
+train*.log
+output_v2/
