@@ -116,6 +116,8 @@ Or choose a checkpoint explicitly:
 uv run python evaluate.py --data-root /path/to/OrganoIDNetData-256 --ckpt models/best.pt
 ```
 
+Note: `evaluate.py` removes and recreates the `output/` directory before writing results.
+
 Outputs:
 
 - `output/metrics.csv`

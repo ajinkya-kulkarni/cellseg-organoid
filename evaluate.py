@@ -4,6 +4,7 @@
 import argparse
 import csv
 import random
+import shutil
 from pathlib import Path
 
 import cv2
@@ -165,6 +166,8 @@ def main():
     data_root = Path(args.data_root)
     ckpt = Path(args.ckpt) if args.ckpt else Path(__file__).parent / "models" / "best.pt"
 
+    if OUT.exists():
+        shutil.rmtree(OUT)
     OUT.mkdir(exist_ok=True)
 
     if not ckpt.exists():
