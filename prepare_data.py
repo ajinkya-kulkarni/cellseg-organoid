@@ -268,12 +268,18 @@ def main():
     with zipfile.ZipFile(source_zip) as z:
         z.extractall(extract_dir)
 
+    content = list(extract_dir.iterdir())
+    base_dir = content[0] if len(content) == 1 and content[0].is_dir() else extract_dir
+
     images = []
     missing_masks = []
 
-    for img_path in sorted((extract_dir / "Images").glob("*.tif")):
+    for img_path in sorted((base_dir / "Images").glob("*.tif")):
         stem = img_path.stem
-        mask_path = extract_dir / "Masks" / f"{stem}_mask.tif"
+        for suffix in ("_mask", ""):
+            mask_path = base_dir / "Masks" / f"{stem}{suffix}.tif"
+            if mask_path.exists():
+                break
         if mask_path.exists():
             add_image_entry(
                 images,
@@ -285,7 +291,7 @@ def main():
                 mask_source=f"{source_zip}::{mask_path.name}",
             )
         else:
-            missing_masks.append((img_path, mask_path))
+            missing_masks.append((img_path, base_dir / "Masks" / f"{stem}_mask.tif"))
 
     if missing_masks:
         examples = "\n".join(
