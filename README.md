@@ -27,6 +27,27 @@ Or use the existing virtual environment if already created:
 source .venv/bin/activate
 ```
 
+## Remote / Headless Server Setup
+
+On a clean Ubuntu/Debian instance (e.g. a Scaleaway VM) with Python ≥3.12:
+
+```bash
+# Install uv if not already installed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Add uv to your PATH (or restart your shell)
+source ~/.local/bin/env
+
+# Clone the repository
+git clone <repo-url> cellseg-organoid
+cd cellseg-organoid
+
+# Install dependencies (includes CUDA PyTorch on GPU-equipped instances)
+uv sync
+```
+
+`uv sync` automatically detects and installs the appropriate PyTorch variant (CUDA on GPU instances, CPU otherwise).
+
 ## Data Preparation
 
 `prepare_data.py` creates a new 256x256 patch dataset from a source zip containing paired full-field images and instance masks:
