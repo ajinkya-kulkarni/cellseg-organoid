@@ -48,6 +48,14 @@ uv sync
 
 `uv sync` automatically detects and installs the appropriate PyTorch variant (CUDA on GPU instances, CPU otherwise).
 
+> **Note for headless servers**: OpenCV requires `libGL.so.1` at runtime.
+> If you encounter `ImportError: libGL.so.1: cannot open shared object file`,
+> install the system library:
+>
+> ```bash
+> sudo apt update && sudo apt install -y libgl1
+> ```
+
 ## Data Preparation
 
 `prepare_data.py` creates a new 256x256 patch dataset from a source zip containing paired full-field images and instance masks:
