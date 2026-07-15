@@ -11,5 +11,5 @@ else:
     DEVICE = "cpu"
 
 
-def create_cellpose_model(enc_name="efficientnet_b0", enc_pretrain=True):
+def create_cellpose_model(enc_name="efficientnet_b3", enc_pretrain=True):
     return cellpose_nuclei(n_nuc_classes=2, enc_name=enc_name, enc_pretrain=enc_pretrain)

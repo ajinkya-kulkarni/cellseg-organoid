@@ -23,6 +23,7 @@ from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalizatio
 
 from utils import DEVICE, create_cellpose_model
 
+ENCODER = "efficientnet_b3"
 OUT = Path(__file__).parent / "output"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
 IOU_THRESH = 0.5
@@ -30,7 +31,7 @@ N_VIZ = 5
 
 
 def load_model(ckpt_path):
-    model = create_cellpose_model(enc_pretrain=False)
+    model = create_cellpose_model(enc_name=ENCODER, enc_pretrain=False)
     model.load_state_dict(torch.load(ckpt_path, map_location="cpu")["model"])
     model = model.to(DEVICE)
     model.eval()

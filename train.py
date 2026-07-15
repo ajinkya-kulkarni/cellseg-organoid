@@ -31,7 +31,7 @@ OUT_DIR = Path(__file__).parent / "output"
 MODELS_DIR = Path(__file__).parent / "models"
 
 LR = 1e-3
-ENCODER = "efficientnet_b0"
+ENCODER = "efficientnet_b3"
 ETA_MIN = 1e-6
 CLIP_NORM = 1.0
 
@@ -90,6 +90,17 @@ def dice_score(logits, target, eps=1e-8):
     if denominator.item() == 0:
         return 1.0
     return (2.0 * intersection / (denominator + eps)).item()
+
+
+def dice_loss(logits, target, eps=1e-8):
+    """Differentiable Dice loss for the foreground class."""
+    prob_fg = torch.softmax(logits, dim=1)[:, 1]
+    target_fg = (target == 1).float()
+    intersection = (prob_fg * target_fg).sum()
+    denominator = prob_fg.sum() + target_fg.sum()
+    if denominator.item() == 0:
+        return torch.tensor(0.0, device=logits.device)
+    return 1.0 - (2.0 * intersection + eps) / (denominator + eps)
 
 
 @torch.no_grad()
@@ -241,8 +252,10 @@ def main():
 
             out = model(img)
 
-            loss = F.mse_loss(out["nuc"].aux_map, gt_flow) + F.cross_entropy(
-                out["nuc"].type_map, gt_type, weight=class_weights
+            loss = (
+                F.mse_loss(out["nuc"].aux_map, gt_flow)
+                + F.cross_entropy(out["nuc"].type_map, gt_type, weight=class_weights)
+                + dice_loss(out["nuc"].type_map, gt_type)
             )
 
             optimizer.zero_grad()
@@ -267,6 +280,7 @@ def main():
                     + F.cross_entropy(
                         out["nuc"].type_map, gt_type, weight=class_weights
                     ).item()
+                    + dice_loss(out["nuc"].type_map, gt_type).item()
                 )
                 val_dice += dice_score(out["nuc"].type_map, gt_type)
 

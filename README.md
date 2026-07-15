@@ -88,6 +88,8 @@ Train on the regenerated dataset:
 uv run python train.py --data-root /path/to/OrganoIDNetData-256 --epochs 100 --batch-size 16
 ```
 
+Uses an `efficientnet_b3` encoder with combined MSE + Cross-entropy + Dice loss.
+
 Useful development shortcut:
 
 ```bash
