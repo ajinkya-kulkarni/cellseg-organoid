@@ -11,9 +11,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from cellseg_models_pytorch.postproc.functional.cellpose.cellpose import (
-    post_proc_cellpose,
-)
+from cellseg_models_pytorch.postproc import post_proc_stardist
 from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
 from scipy.io import loadmat
 from scipy.optimize import linear_sum_assignment
@@ -25,6 +23,8 @@ ENCODER = "efficientnet_b3"
 OUT = Path(__file__).parent / "output"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
 IOU_THRESH = 0.5
+SCORE_THRESH = 0.4
+NMS_IOU_THRESH = 0.4
 N_VIZ = 5
 
 
@@ -39,12 +39,30 @@ def load_model(ckpt_path):
 @torch.no_grad()
 def predict(model, img_rgb):
     img_norm = TRANSFORM(image=img_rgb)["image"]
-    tensor = torch.from_numpy(img_norm).permute(2, 0, 1).unsqueeze(0).to(DEVICE)
+    tensor = (
+        torch.from_numpy(img_norm)
+        .permute(2, 0, 1)
+        .unsqueeze(0)
+        .float()
+        .to(DEVICE)
+    )
+
     out = model(tensor)
-    type_prob = torch.softmax(out["nuc"].type_map, dim=1)
-    fg_prob = type_prob[0, 1].cpu().numpy()
-    flow = out["nuc"].aux_map[0].cpu().numpy()
-    instances = post_proc_cellpose(fg_prob > 0.5, flow, min_size=30)
+
+    dist_logits = out["nuc"].binary_map[0, 0]
+    rays = out["nuc"].aux_map[0]
+
+    instances = post_proc_stardist(
+        dist_logits.cpu().numpy(),
+        rays.cpu().numpy(),
+        score_thresh=SCORE_THRESH,
+        iou_thresh=NMS_IOU_THRESH,
+        trim_bboxes=True,
+        normalize=True,
+    )
+
+    # Only used for visualization.
+    fg_prob = torch.sigmoid(dist_logits).cpu().numpy()
     return instances, fg_prob
 
 
