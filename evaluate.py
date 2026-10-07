@@ -11,8 +11,11 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from cellseg_models_pytorch.metrics.binary_metrics import iou_score
+from cellseg_models_pytorch.metrics.functional import pairwise_pixel_stats
 from cellseg_models_pytorch.postproc import post_proc_stardist
 from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
+from cellseg_models_pytorch.utils import remap_label
 from scipy.io import loadmat
 from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
@@ -61,9 +64,30 @@ def predict(model, img_rgb):
         normalize=True,
     )
 
-    # Only used for visualization.
-    fg_prob = torch.sigmoid(dist_logits).cpu().numpy()
-    return instances, fg_prob
+    return instances
+
+
+def pq_stats(gt, pred, iou_thresh=0.5):
+    """Return TP, FP, FN and matched-IoU sum for dataset-level PQ."""
+    gt = remap_label(gt)
+    pred = remap_label(pred)
+
+    n_gt = len(np.unique(gt)) - 1
+    n_pred = len(np.unique(pred)) - 1
+
+    iou = pairwise_pixel_stats(gt, pred, metric_func=iou_score)
+    if not iou:
+        return 0, n_pred, n_gt, 0.0
+
+    iou = iou[0]
+    matches = iou > iou_thresh
+
+    tp = int(matches.sum())
+    fp = n_pred - tp
+    fn = n_gt - tp
+    iou_sum = float(iou[matches].sum())
+
+    return tp, fp, fn, iou_sum
 
 
 def dice_iou(pred_mask, gt_mask):
@@ -111,7 +135,7 @@ def match_instances(pred_inst, gt_inst):
     return tp, fp, fn, pairs
 
 
-def visualize(img_rgb, gt_inst, pred_inst, fg_prob, save_path, title=""):
+def visualize(img_rgb, gt_inst, pred_inst, save_path, title=""):
     spec = plt.colormaps["nipy_spectral"]
     spec.set_bad(color="black")
 
@@ -149,12 +173,30 @@ def visualize(img_rgb, gt_inst, pred_inst, fg_prob, save_path, title=""):
     print(f"  Saved: {save_path.name}")
 
 
-def print_section(name, n, dice_arr, iou_arr, ce_arr, gt_arr, pred_arr, tp, fp, fn):
+def print_section(
+    name,
+    n,
+    dice_arr,
+    iou_arr,
+    ce_arr,
+    gt_arr,
+    pred_arr,
+    tp,
+    fp,
+    fn,
+    pq_tp,
+    pq_fp,
+    pq_fn,
+    pq_iou_sum,
+):
     if n == 0:
         return
     p = tp / (tp + fp + 1e-8)
     r = tp / (tp + fn + 1e-8)
     f = 2 * p * r / (p + r + 1e-8)
+    dq = pq_tp / (pq_tp + 0.5 * pq_fp + 0.5 * pq_fn + 1e-8)
+    sq = pq_iou_sum / (pq_tp + 1e-8)
+    pq = dq * sq
     print(f"\n{'='*55}")
     print(f"  {name} ({n} patches)")
     print(f"{'='*55}")
@@ -171,6 +213,10 @@ def print_section(name, n, dice_arr, iou_arr, ce_arr, gt_arr, pred_arr, tp, fp, 
     print(f"    Precision:  {p:.4f}")
     print(f"    Recall:     {r:.4f}")
     print(f"    F1:         {f:.4f}")
+    print("  Panoptic quality:")
+    print(f"    PQ:         {pq:.4f}")
+    print(f"    DQ:         {dq:.4f}")
+    print(f"    SQ:         {sq:.4f}")
 
 
 def main():
@@ -203,7 +249,16 @@ def main():
     dice_list, iou_list = [], []
     ce_list, gt_n_list, pred_n_list = [], [], []
     tp_total, fp_total, fn_total = 0, 0, 0
-    tp_sp, fp_sp, fn_sp = {"Human": 0, "Mouse": 0}, {"Human": 0, "Mouse": 0}, {"Human": 0, "Mouse": 0}
+    tp_sp = {"Human": 0, "Mouse": 0}
+    fp_sp = {"Human": 0, "Mouse": 0}
+    fn_sp = {"Human": 0, "Mouse": 0}
+
+    pq_tp_total, pq_fp_total, pq_fn_total = 0, 0, 0
+    pq_iou_total = 0.0
+    pq_tp_sp = {"Human": 0, "Mouse": 0}
+    pq_fp_sp = {"Human": 0, "Mouse": 0}
+    pq_fn_sp = {"Human": 0, "Mouse": 0}
+    pq_iou_sp = {"Human": 0.0, "Mouse": 0.0}
 
     random.seed(42)
     viz_paths = set(random.sample(img_paths, min(N_VIZ, len(img_paths))))
@@ -217,11 +272,11 @@ def main():
         mat = loadmat(str(label_dir / img_path.with_suffix(".mat").name))
         gt_inst = mat["inst"]
 
-        pred_inst, fg_prob = predict(model, img_rgb)
+        pred_inst = predict(model, img_rgb)
 
         if img_path in viz_paths:
             save_path = OUT / f"pred_{stem}.png"
-            visualize(img_rgb, gt_inst, pred_inst, fg_prob, save_path, title=stem)
+            visualize(img_rgb, gt_inst, pred_inst, save_path, title=stem)
 
         gt_bin = gt_inst > 0
         pred_bin = pred_inst > 0
@@ -243,6 +298,20 @@ def main():
         fp_sp[species] += fp
         fn_sp[species] += fn
 
+        pq_tp, pq_fp, pq_fn, pq_iou_sum = pq_stats(
+            gt_inst,
+            pred_inst,
+            iou_thresh=IOU_THRESH,
+        )
+        pq_tp_total += pq_tp
+        pq_fp_total += pq_fp
+        pq_fn_total += pq_fn
+        pq_iou_total += pq_iou_sum
+        pq_tp_sp[species] += pq_tp
+        pq_fp_sp[species] += pq_fp
+        pq_fn_sp[species] += pq_fn
+        pq_iou_sp[species] += pq_iou_sum
+
         rows.append({
             "patch": stem, "species": species,
             "dice": round(d, 4), "iou": round(i, 4),
@@ -262,14 +331,40 @@ def main():
     gt_arr = np.array(gt_n_list)
     pred_arr = np.array(pred_n_list)
 
-    print_section("Overall", len(rows), dice_arr, iou_arr, ce_arr, gt_arr, pred_arr,
-                  tp_total, fp_total, fn_total)
+    print_section(
+        "Overall",
+        len(rows),
+        dice_arr,
+        iou_arr,
+        ce_arr,
+        gt_arr,
+        pred_arr,
+        tp_total,
+        fp_total,
+        fn_total,
+        pq_tp_total,
+        pq_fp_total,
+        pq_fn_total,
+        pq_iou_total,
+    )
     for sp in ["Human", "Mouse"]:
         mask = np.array([r["species"] == sp for r in rows])
-        print_section(sp, mask.sum(),
-                      dice_arr[mask], iou_arr[mask], ce_arr[mask],
-                      gt_arr[mask], pred_arr[mask],
-                      tp_sp[sp], fp_sp[sp], fn_sp[sp])
+        print_section(
+            sp,
+            mask.sum(),
+            dice_arr[mask],
+            iou_arr[mask],
+            ce_arr[mask],
+            gt_arr[mask],
+            pred_arr[mask],
+            tp_sp[sp],
+            fp_sp[sp],
+            fn_sp[sp],
+            pq_tp_sp[sp],
+            pq_fp_sp[sp],
+            pq_fn_sp[sp],
+            pq_iou_sp[sp],
+        )
 
     print(f"\nMetrics saved to: {csv_path}")
 
