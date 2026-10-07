@@ -1,6 +1,6 @@
 # cellseg-organoid
 
-Cellpose-style organoid segmentation experiments using `cellseg-models-pytorch` on a regenerated 256x256 patch version of OrganoIDNetData.
+StarDist-based organoid instance segmentation using `cellseg-models-pytorch` on a regenerated 256x256 patch version of OrganoIDNetData.
 
 This repo is meant for training and evaluating an instance segmentation model on PDAC organoid microscopy images. The data preparation script pools the original training, validation, and test sources to create a new image-level split balanced by organoid-content properties.
 
@@ -29,7 +29,7 @@ source .venv/bin/activate
 
 ## Remote / Headless Server Setup
 
-On a clean Ubuntu/Debian instance (e.g. a Scaleaway VM) with Python ≥3.12:
+On a clean Ubuntu/Debian instance (e.g. a Scaleaway VM) with Python 3.12:
 
 ```bash
 # Install uv if not already installed
@@ -114,32 +114,42 @@ Labels are MATLAB `.mat` files with:
 Train on the regenerated dataset:
 
 ```bash
-uv run python train.py --data-root /path/to/OrganoIDNetData-256 --epochs 100 --batch-size 16
+uv run python train.py \
+  --data-root /path/to/OrganoIDNetData-256 \
+  --epochs 100 \
+  --batch-size 8 \
+  --num-workers 2
 ```
 
-Uses an `efficientnet_b3` encoder with combined MSE + Cross-entropy + Dice loss.
+The model is StarDist with an ImageNet-pretrained `efficientnet_b3` encoder and 32 rays. Training uses:
 
-Useful development shortcut:
+- BCE-with-logits on the normalized per-instance distance/objectness map
+- Masked StarDist MAE on the 32 ray-distance maps, weighted by 0.2
+- Weighted foreground/background cross-entropy plus Dice on the auxiliary type head
+
+Validation runs StarDist polygon/NMS post-processing with `score_thresh=0.4` and `iou_thresh=0.4`. Dataset-level PQ is computed at instance IoU > 0.5. `best.pt` and early stopping are based on validation PQ; for a 100-epoch run, patience is 20 epochs.
+
+For a quick smoke test:
 
 ```bash
-uv run python train.py --data-root /path/to/OrganoIDNetData-256 --epochs 5 --sub-size 128
+uv run python train.py \
+  --data-root /path/to/OrganoIDNetData-256 \
+  --epochs 1 \
+  --batch-size 2 \
+  --sub-size 8 \
+  --val-sub-size 32 \
+  --num-workers 0
 ```
 
-Adjust DataLoader workers if needed (default is 4):
-
-```bash
-uv run python train.py --data-root /path/to/OrganoIDNetData-256 --num-workers 8
-```
-
-Training uses the full validation split.
+Omit `--sub-size` and `--val-sub-size` for the real run so the full training and validation splits are used.
 
 Note: `train.py` removes and recreates the `output/` and `models/` directories before starting, so old checkpoints and visualizations are cleared.
 
 Outputs:
 
 - `models/last.pt`
-- `models/best.pt`
-- `output/viz_epoch_*.png`
+- `models/best.pt` (best validation PQ)
+- `output/viz_epoch_*.png` (input, ground truth instances, predicted instances)
 
 ## Evaluation
 
@@ -155,12 +165,14 @@ Or choose a checkpoint explicitly:
 uv run python evaluate.py --data-root /path/to/OrganoIDNetData-256 --ckpt models/best.pt
 ```
 
+Evaluation uses the same StarDist post-processing defaults as validation (`score_thresh=0.4`, NMS IoU `0.4`) and reports binary Dice/IoU, count error, instance precision/recall/F1, and dataset-level PQ/DQ/SQ at instance IoU > 0.5.
+
 Note: `evaluate.py` removes and recreates the `output/` directory before writing results.
 
 Outputs:
 
 - `output/metrics.csv`
-- `output/pred_*.png`
+- `output/pred_*.png` (input, ground truth instances, predicted instances)
 
 For empty ground-truth patches, perfect empty predictions score Dice and IoU as `1.0`.
 
