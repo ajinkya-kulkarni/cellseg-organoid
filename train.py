@@ -1,34 +1,34 @@
-#!/usr/bin/env python3
 """Train StarDist (cellseg_models.pytorch) on OrganoIDNetData-256."""
 
-import os
+import argparse
 import math
+import os
 import random
 import shutil
 from pathlib import Path
 
-import argparse
-
+import albumentations as A
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.nn.utils as nn_utils
-from torch.utils.data import Dataset, DataLoader, Subset
-from scipy.io import loadmat
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-
-import albumentations as A
-from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
-
-from utils import DEVICE, create_stardist_model
 from cellseg_models_pytorch.losses import MAE
 from cellseg_models_pytorch.metrics.binary_metrics import iou_score
 from cellseg_models_pytorch.metrics.functional import pairwise_pixel_stats
 from cellseg_models_pytorch.postproc import post_proc_stardist
-from cellseg_models_pytorch.transforms.functional import gen_dist_maps, gen_stardist_maps
+from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
+from cellseg_models_pytorch.transforms.functional import (
+    gen_dist_maps,
+    gen_stardist_maps,
+)
 from cellseg_models_pytorch.utils import remap_label
+from scipy.io import loadmat
+from torch.utils.data import DataLoader, Dataset, Subset
+from tqdm import tqdm
+
+from utils import DEVICE, create_stardist_model
 
 SEED = 42
 
@@ -153,7 +153,7 @@ def save_viz(loader, model, epoch, path):
     spec = plt.colormaps["nipy_spectral"]
     spec.set_bad(color="black")
 
-    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+    _, axes = plt.subplots(1, 3, figsize=(14, 5))
 
     axes[0].imshow(img.permute(1, 2, 0).clip(0, 1))
     axes[0].set_title("Input")

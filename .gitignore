@@ -4,7 +4,6 @@ __pycache__/
 .venv/
 .DS_Store
 .env
-output/
 models/
 train*.log
-output_v2/
+output/

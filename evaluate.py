@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Evaluate best.pt on all test patches, print metrics, save CSV, generate 5 viz plots."""
 
 import argparse
@@ -7,21 +6,20 @@ import random
 import shutil
 from pathlib import Path
 
+import albumentations as A
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
-import albumentations as A
-from scipy.io import loadmat
-from scipy.optimize import linear_sum_assignment
-from tqdm import tqdm
-
 from cellseg_models_pytorch.postproc.functional.cellpose.cellpose import (
     post_proc_cellpose,
 )
 from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
+from scipy.io import loadmat
+from scipy.optimize import linear_sum_assignment
+from tqdm import tqdm
 
-from utils import DEVICE, create_cellpose_model
+from utils import DEVICE, create_stardist_model
 
 ENCODER = "efficientnet_b3"
 OUT = Path(__file__).parent / "output"
@@ -31,7 +29,7 @@ N_VIZ = 5
 
 
 def load_model(ckpt_path):
-    model = create_cellpose_model(enc_name=ENCODER, enc_pretrain=False)
+    model = create_stardist_model(enc_name=ENCODER, enc_pretrain=False)
     model.load_state_dict(torch.load(ckpt_path, map_location="cpu")["model"])
     model = model.to(DEVICE)
     model.eval()
@@ -99,7 +97,7 @@ def visualize(img_rgb, gt_inst, pred_inst, fg_prob, save_path, title=""):
     spec = plt.colormaps["nipy_spectral"]
     spec.set_bad(color="black")
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    _, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     axes[0].imshow(img_rgb)
     axes[0].set_title("Input")
