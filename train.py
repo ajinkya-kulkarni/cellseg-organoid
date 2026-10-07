@@ -28,6 +28,7 @@ from cellseg_models_pytorch.metrics.binary_metrics import iou_score
 from cellseg_models_pytorch.metrics.functional import pairwise_pixel_stats
 from cellseg_models_pytorch.postproc import post_proc_stardist
 from cellseg_models_pytorch.transforms.functional import gen_dist_maps, gen_stardist_maps
+from cellseg_models_pytorch.utils import remap_label
 
 SEED = 42
 
@@ -118,6 +119,9 @@ def dice_loss(logits, target, eps=1e-8):
 
 def pq_stats(gt, pred, iou_thresh=0.5):
     """Return TP, FP, FN and matched-IoU sum for dataset-level PQ."""
+    gt = remap_label(gt)
+    pred = remap_label(pred)
+
     n_gt = len(np.unique(gt)) - 1
     n_pred = len(np.unique(pred)) - 1
 
