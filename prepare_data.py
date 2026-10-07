@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Create a 256x256 OrganoIDNetData patch dataset.
 
 This pools the original annotations and original test images into one image-level
