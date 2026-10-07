@@ -24,6 +24,9 @@ from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalizatio
 
 from utils import DEVICE, create_stardist_model
 from cellseg_models_pytorch.losses import MAE
+from cellseg_models_pytorch.metrics.binary_metrics import iou_score
+from cellseg_models_pytorch.metrics.functional import pairwise_pixel_stats
+from cellseg_models_pytorch.postproc import post_proc_stardist
 from cellseg_models_pytorch.transforms.functional import gen_dist_maps, gen_stardist_maps
 
 SEED = 42
@@ -111,6 +114,26 @@ def dice_loss(logits, target, eps=1e-8):
     if denominator.item() == 0:
         return torch.tensor(0.0, device=logits.device)
     return 1.0 - (2.0 * intersection + eps) / (denominator + eps)
+
+
+def pq_stats(gt, pred, iou_thresh=0.5):
+    """Return TP, FP, FN and matched-IoU sum for dataset-level PQ."""
+    n_gt = len(np.unique(gt)) - 1
+    n_pred = len(np.unique(pred)) - 1
+
+    iou = pairwise_pixel_stats(gt, pred, metric_func=iou_score)
+    if not iou:
+        return 0, n_pred, n_gt, 0.0
+
+    iou = iou[0]
+    matches = iou > iou_thresh
+
+    tp = int(matches.sum())
+    fp = n_pred - tp
+    fn = n_gt - tp
+    iou_sum = float(iou[matches].sum())
+
+    return tp, fp, fn, iou_sum
 
 
 @torch.no_grad()
@@ -244,7 +267,7 @@ def main():
     )
     print(f"  Class weights: bg={class_weights[0]:.4f}, fg={class_weights[1]:.4f}")
 
-    best_dice = 0.0
+    best_pq = -1.0
     no_improve = 0
 
     for epoch in range(1, MAX_EPOCHS + 1):
@@ -293,6 +316,10 @@ def main():
         model.eval()
         val_loss = 0.0
         val_dice = 0.0
+        pq_tp = 0
+        pq_fp = 0
+        pq_fn = 0
+        pq_iou_sum = 0.0
 
         with torch.no_grad():
             for batch in val_loader:
@@ -326,26 +353,64 @@ def main():
                 )
                 val_dice += dice_score(out["nuc"].type_map, gt_type)
 
+                gt_inst = batch["inst"].cpu().numpy()
+                pred_dist = out["nuc"].binary_map[:, 0].cpu().numpy()
+                pred_rays = out["nuc"].aux_map.cpu().numpy()
+
+                for i in range(img.shape[0]):
+                    pred_inst = post_proc_stardist(
+                        pred_dist[i],
+                        pred_rays[i],
+                        score_thresh=0.4,
+                        iou_thresh=0.4,
+                        trim_bboxes=True,
+                        normalize=True,
+                    )
+                    tp, fp, fn, iou_sum = pq_stats(
+                        gt_inst[i],
+                        pred_inst,
+                        iou_thresh=0.5,
+                    )
+                    pq_tp += tp
+                    pq_fp += fp
+                    pq_fn += fn
+                    pq_iou_sum += iou_sum
+
         avg_train = train_loss / len(train_loader)
         avg_val = val_loss / len(val_loader)
         avg_dice = val_dice / len(val_loader)
+        dq = pq_tp / (pq_tp + 0.5 * pq_fp + 0.5 * pq_fn + 1e-8)
+        sq = pq_iou_sum / (pq_tp + 1e-8)
+        avg_pq = dq * sq
 
         print(
-            f"  train: {avg_train:.4f}  val: {avg_val:.4f}  dice: {avg_dice:.4f}  lr: {lr:.2e}"
+            f"  train: {avg_train:.4f}  val: {avg_val:.4f}  "
+            f"dice: {avg_dice:.4f}  pq: {avg_pq:.4f}  "
+            f"dq: {dq:.4f}  sq: {sq:.4f}  lr: {lr:.2e}"
         )
 
         torch.save(
             {"model": model.state_dict(), "epoch": epoch}, MODELS_DIR / "last.pt"
         )
 
-        if avg_dice > best_dice:
-            best_dice = avg_dice
+        if avg_pq > best_pq:
+            best_pq = avg_pq
             no_improve = 0
             torch.save(
-                {"model": model.state_dict(), "epoch": epoch, "dice": avg_dice},
+                {
+                    "model": model.state_dict(),
+                    "epoch": epoch,
+                    "pq": avg_pq,
+                    "dq": dq,
+                    "sq": sq,
+                    "dice": avg_dice,
+                },
                 MODELS_DIR / "best.pt",
             )
-            print(f"  -> best.pt (dice={avg_dice:.4f})")
+            print(
+                f"  -> best.pt "
+                f"(pq={avg_pq:.4f}, dq={dq:.4f}, sq={sq:.4f})"
+            )
         else:
             no_improve += 1
 
@@ -356,7 +421,7 @@ def main():
             print(f"Early stopping at epoch {epoch} (no improvement for {PATIENCE})")
             break
 
-    print(f"\nDone. Best Dice: {best_dice:.4f}")
+    print(f"\nDone. Best PQ: {best_pq:.4f}")
 
 
 if __name__ == "__main__":
