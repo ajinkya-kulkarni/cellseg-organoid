@@ -148,7 +148,16 @@ def save_viz(loader, model, epoch, path):
     gt_inst = batch["inst"][0].cpu().numpy()
 
     out = model(img.unsqueeze(0).to(DEVICE))
-    prob_fg = torch.softmax(out["nuc"].type_map, dim=1)[0, 1].cpu().numpy()
+    pred_dist = out["nuc"].binary_map[0, 0].cpu().numpy()
+    pred_rays = out["nuc"].aux_map[0].cpu().numpy()
+    pred_inst = post_proc_stardist(
+        pred_dist,
+        pred_rays,
+        score_thresh=0.4,
+        iou_thresh=0.4,
+        trim_bboxes=True,
+        normalize=True,
+    )
 
     spec = plt.colormaps["nipy_spectral"]
     spec.set_bad(color="black")
@@ -167,8 +176,14 @@ def save_viz(loader, model, epoch, path):
     axes[1].set_title("GT instances")
     axes[1].axis("off")
 
-    axes[2].imshow(prob_fg, cmap="Reds", vmin=0, vmax=1)
-    axes[2].set_title(f"Pred probability (epoch {epoch})")
+    pred_viz = pred_inst.astype(float)
+    if pred_viz.max() > 0:
+        pred_viz = 0.08 + 0.75 * pred_viz / pred_viz.max()
+    pred_viz[pred_inst == 0] = np.nan
+    axes[2].imshow(pred_viz, cmap=spec, vmin=0, vmax=1)
+    axes[2].set_title(
+        f"Pred instances (epoch {epoch}, n={len(np.unique(pred_inst)) - 1})"
+    )
     axes[2].axis("off")
 
     plt.tight_layout()
