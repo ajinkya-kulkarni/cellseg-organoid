@@ -183,6 +183,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size (default: 16)")
     parser.add_argument("--sub-size", type=int, default=None,
                         help="Limit training samples (default: use all)")
+    parser.add_argument("--val-sub-size", type=int, default=None,
+                        help="Limit validation samples (default: use all)")
     parser.add_argument("--num-workers", type=int, default=4,
                         help="DataLoader workers (default: 4)")
     args = parser.parse_args()
@@ -191,6 +193,7 @@ def main():
     BATCH_SIZE = args.batch_size
     MAX_EPOCHS = args.epochs
     sub_size = args.sub_size
+    val_sub_size = args.val_sub_size
     NUM_WORKERS = args.num_workers
 
     WARMUP_EPOCHS = max(3, MAX_EPOCHS // 10)
@@ -239,6 +242,8 @@ def main():
 
     if sub_size is not None:
         train_ds = Subset(train_ds, range(min(sub_size, len(train_ds))))
+    if val_sub_size is not None:
+        val_ds = Subset(val_ds, range(min(val_sub_size, len(val_ds))))
 
     train_loader = DataLoader(train_ds, BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
     val_loader = DataLoader(val_ds, BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
