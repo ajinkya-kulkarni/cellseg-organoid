@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train CellPose (cellseg_models.pytorch) on OrganoIDNetData-256."""
+"""Train StarDist (cellseg_models.pytorch) on OrganoIDNetData-256."""
 
 import os
 import math
@@ -22,8 +22,9 @@ from tqdm import tqdm
 import albumentations as A
 from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
 
-from utils import DEVICE, create_cellpose_model
-from cellseg_models_pytorch.transforms.functional.cellpose import gen_flow_maps
+from utils import DEVICE, create_stardist_model
+from cellseg_models_pytorch.losses import MAE
+from cellseg_models_pytorch.transforms.functional import gen_dist_maps, gen_stardist_maps
 
 SEED = 42
 
@@ -32,6 +33,7 @@ MODELS_DIR = Path(__file__).parent / "models"
 
 LR = 1e-3
 ENCODER = "efficientnet_b3"
+N_RAYS = 32
 ETA_MIN = 1e-6
 CLIP_NORM = 1.0
 
@@ -71,14 +73,22 @@ class OrganoidDataset(Dataset):
             inst = aug["masks"][0].astype(np.int32)
             type_map = aug["masks"][1].astype(np.int32)
 
-        flow = gen_flow_maps(inst)
+        rays = gen_stardist_maps(inst, N_RAYS).astype(np.float32)
+        dist = gen_dist_maps(inst).astype(np.float32)
 
         img = torch.from_numpy(img).permute(2, 0, 1).float()
         inst_map = torch.from_numpy(inst).long()
         type_map = torch.from_numpy(type_map).long()
-        flow = torch.from_numpy(flow).float()
+        rays = torch.from_numpy(rays).float()
+        dist = torch.from_numpy(dist).float()
 
-        return {"image": img, "inst": inst_map, "type": type_map, "inst-cellpose": flow}
+        return {
+            "image": img,
+            "inst": inst_map,
+            "type": type_map,
+            "rays": rays,
+            "dist": dist,
+        }
 
 
 def dice_score(logits, target, eps=1e-8):
@@ -140,7 +150,7 @@ def save_viz(loader, model, epoch, path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train CellPose on OrganoIDNetData-256")
+    parser = argparse.ArgumentParser(description="Train StarDist on OrganoIDNetData-256")
     parser.add_argument("--data-root", type=str, required=True, help="Path to OrganoIDNetData-256")
     parser.add_argument("--epochs", type=int, default=100, help="Max epochs (default: 100)")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size (default: 16)")
@@ -208,9 +218,14 @@ def main():
 
     print(f"Train: {len(train_ds)} | Val: {len(val_ds)}")
 
-    model = create_cellpose_model(enc_name=ENCODER, enc_pretrain=True)
+    model = create_stardist_model(
+        enc_name=ENCODER,
+        enc_pretrain=True,
+        n_rays=N_RAYS,
+    )
     model = model.to(DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
+    ray_loss_fn = MAE(alpha=1e-4, apply_mask=True)
 
     # Compute class weights from training labels
     n_bg, n_fg = 0, 0
@@ -247,16 +262,27 @@ def main():
 
         for batch in tqdm(train_loader, desc=f"Epoch {epoch}"):
             img = batch["image"].to(DEVICE)
-            gt_flow = batch["inst-cellpose"].to(DEVICE)
+            gt_rays = batch["rays"].to(DEVICE)
+            gt_dist = batch["dist"].to(DEVICE)
             gt_type = batch["type"].to(DEVICE)
 
             out = model(img)
 
-            loss = (
-                F.mse_loss(out["nuc"].aux_map, gt_flow)
-                + F.cross_entropy(out["nuc"].type_map, gt_type, weight=class_weights)
+            fg_mask = (gt_type > 0).float()
+            dist_loss = F.binary_cross_entropy_with_logits(
+                out["nuc"].binary_map[:, 0],
+                gt_dist,
+            )
+            ray_loss = ray_loss_fn(
+                out["nuc"].aux_map,
+                gt_rays,
+                mask=fg_mask,
+            )
+            type_loss = (
+                F.cross_entropy(out["nuc"].type_map, gt_type, weight=class_weights)
                 + dice_loss(out["nuc"].type_map, gt_type)
             )
+            loss = dist_loss + 0.2 * ray_loss + type_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -271,16 +297,32 @@ def main():
         with torch.no_grad():
             for batch in val_loader:
                 img = batch["image"].to(DEVICE)
-                gt_flow = batch["inst-cellpose"].to(DEVICE)
+                gt_rays = batch["rays"].to(DEVICE)
+                gt_dist = batch["dist"].to(DEVICE)
                 gt_type = batch["type"].to(DEVICE)
 
                 out = model(img)
-                val_loss += (
-                    F.mse_loss(out["nuc"].aux_map, gt_flow).item()
-                    + F.cross_entropy(
+
+                fg_mask = (gt_type > 0).float()
+                dist_loss = F.binary_cross_entropy_with_logits(
+                    out["nuc"].binary_map[:, 0],
+                    gt_dist,
+                )
+                ray_loss = ray_loss_fn(
+                    out["nuc"].aux_map,
+                    gt_rays,
+                    mask=fg_mask,
+                )
+                type_loss = (
+                    F.cross_entropy(
                         out["nuc"].type_map, gt_type, weight=class_weights
-                    ).item()
-                    + dice_loss(out["nuc"].type_map, gt_type).item()
+                    )
+                    + dice_loss(out["nuc"].type_map, gt_type)
+                )
+                val_loss += (
+                    dist_loss.item()
+                    + 0.2 * ray_loss.item()
+                    + type_loss.item()
                 )
                 val_dice += dice_score(out["nuc"].type_map, gt_type)
 
