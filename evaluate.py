@@ -22,7 +22,7 @@ from tqdm import tqdm
 from config import ENCODER, INSTANCE_IOU_THRESH, NMS_IOU_THRESH, SCORE_THRESH
 from utils import DEVICE, create_stardist_model
 
-OUT = Path(__file__).parent / "output"
+OUT = Path(__file__).parent / "output" / "eval"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
 IOU_THRESH = INSTANCE_IOU_THRESH
 N_VIZ = 5
@@ -194,7 +194,7 @@ def main():
 
     if OUT.exists():
         shutil.rmtree(OUT)
-    OUT.mkdir(exist_ok=True)
+    OUT.mkdir(parents=True, exist_ok=True)
 
     if not ckpt.exists():
         print(f"Checkpoint not found: {ckpt}")
