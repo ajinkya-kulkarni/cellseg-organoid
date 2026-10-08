@@ -17,7 +17,6 @@ from cellseg_models_pytorch.postproc import post_proc_stardist
 from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
 from cellseg_models_pytorch.utils import remap_label
 from scipy.io import loadmat
-from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
 from utils import DEVICE, create_stardist_model
@@ -99,40 +98,6 @@ def dice_iou(pred_mask, gt_mask):
     dice = 2 * inter / (denominator + 1e-8)
     iou = inter / (union + 1e-8)
     return float(dice), float(iou)
-
-
-def match_instances(pred_inst, gt_inst):
-    pred_ids = np.unique(pred_inst)
-    pred_ids = pred_ids[pred_ids > 0]
-    gt_ids = np.unique(gt_inst)
-    gt_ids = gt_ids[gt_ids > 0]
-    if len(pred_ids) == 0 and len(gt_ids) == 0:
-        return 0, 0, 0, []
-    if len(pred_ids) == 0:
-        return 0, 0, len(gt_ids), []
-    if len(gt_ids) == 0:
-        return 0, len(pred_ids), 0, []
-
-    cost = np.zeros((len(gt_ids), len(pred_ids)))
-    for i, gid in enumerate(gt_ids):
-        gmask = gt_inst == gid
-        for j, pid in enumerate(pred_ids):
-            pmask = pred_inst == pid
-            inter = (gmask & pmask).sum()
-            union = (gmask | pmask).sum()
-            cost[i, j] = 1 - inter / (union + 1e-8)
-
-    gt_idx, pred_idx = linear_sum_assignment(cost)
-    tp = 0
-    pairs = []
-    for i, j in zip(gt_idx, pred_idx):
-        iou = 1 - cost[i, j]
-        if iou > IOU_THRESH:
-            tp += 1
-            pairs.append((gt_ids[i], pred_ids[j], iou))
-    fp = len(pred_ids) - tp
-    fn = len(gt_ids) - tp
-    return tp, fp, fn, pairs
 
 
 def visualize(img_rgb, gt_inst, pred_inst, save_path, title=""):
@@ -244,6 +209,8 @@ def main():
     img_dir = data_root / "Test" / "images"
     label_dir = data_root / "Test" / "labels"
     img_paths = sorted(img_dir.glob("*.png"))
+    if not img_paths:
+        raise FileNotFoundError(f"No test images found in: {img_dir}")
 
     rows = []
     dice_list, iou_list = [], []
@@ -268,8 +235,14 @@ def main():
         species = "Human" if "Human" in stem else "Mouse"
 
         img = cv2.imread(str(img_path))
+        if img is None:
+            raise RuntimeError(f"Could not read image: {img_path}")
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        mat = loadmat(str(label_dir / img_path.with_suffix(".mat").name))
+
+        label_path = label_dir / img_path.with_suffix(".mat").name
+        if not label_path.exists():
+            raise FileNotFoundError(f"Missing label: {label_path}")
+        mat = loadmat(str(label_path))
         gt_inst = mat["inst"]
 
         pred_inst = predict(model, img_rgb)
@@ -290,19 +263,21 @@ def main():
         gt_n_list.append(gt_n)
         pred_n_list.append(pred_n)
 
-        tp, fp, fn, _ = match_instances(pred_inst, gt_inst)
+        pq_tp, pq_fp, pq_fn, pq_iou_sum = pq_stats(
+            gt_inst,
+            pred_inst,
+            iou_thresh=IOU_THRESH,
+        )
+
+        # At strict IoU > 0.5 for disjoint instance masks, valid matches are
+        # inherently one-to-one, so DQ uses the same TP/FP/FN as detection F1.
+        tp, fp, fn = pq_tp, pq_fp, pq_fn
         tp_total += tp
         fp_total += fp
         fn_total += fn
         tp_sp[species] += tp
         fp_sp[species] += fp
         fn_sp[species] += fn
-
-        pq_tp, pq_fp, pq_fn, pq_iou_sum = pq_stats(
-            gt_inst,
-            pred_inst,
-            iou_thresh=IOU_THRESH,
-        )
         pq_tp_total += pq_tp
         pq_fp_total += pq_fp
         pq_fn_total += pq_fn
