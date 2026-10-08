@@ -148,15 +148,15 @@ def save_viz(loader, model, epoch, path):
     gt_inst = batch["inst"][0].cpu().numpy()
 
     out = model(img.unsqueeze(0).to(DEVICE))
-    pred_dist = out["nuc"].binary_map[0, 0].cpu().numpy()
+    pred_prob = torch.sigmoid(out["nuc"].binary_map[0, 0]).cpu().numpy()
     pred_rays = out["nuc"].aux_map[0].cpu().numpy()
     pred_inst = post_proc_stardist(
-        pred_dist,
+        pred_prob,
         pred_rays,
         score_thresh=0.4,
         iou_thresh=0.4,
         trim_bboxes=True,
-        normalize=True,
+        normalize=False,
     )
 
     spec = plt.colormaps["nipy_spectral"]
@@ -378,17 +378,19 @@ def main():
                 val_dice += dice_score(out["nuc"].type_map, gt_type)
 
                 gt_inst = batch["inst"].cpu().numpy()
-                pred_dist = out["nuc"].binary_map[:, 0].cpu().numpy()
+                pred_prob = torch.sigmoid(
+                    out["nuc"].binary_map[:, 0]
+                ).cpu().numpy()
                 pred_rays = out["nuc"].aux_map.cpu().numpy()
 
                 for i in range(img.shape[0]):
                     pred_inst = post_proc_stardist(
-                        pred_dist[i],
+                        pred_prob[i],
                         pred_rays[i],
                         score_thresh=0.4,
                         iou_thresh=0.4,
                         trim_bboxes=True,
-                        normalize=True,
+                        normalize=False,
                     )
                     tp, fp, fn, iou_sum = pq_stats(
                         gt_inst[i],
