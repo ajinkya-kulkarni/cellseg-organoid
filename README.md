@@ -210,6 +210,39 @@ uv run --with onnxruntime python large_inference.py \
 The CLI defaults to a 2000-pixel maximum image side as a memory-safety guard. Pass `--max-dim 0` to disable the guard or a larger value to raise it.
 
 
+
+## napari MVP
+
+The repo now exposes an npe2 napari plugin named **Organoid Segmentation**. The first MVP intentionally has one workflow:
+
+1. Open a 2D grayscale or RGB image in napari.
+2. Open **Plugins → Organoid Segmentation → Organoid Segmentation**.
+3. Choose the image layer.
+4. Run the widget.
+5. The segmentation is added as an editable Labels layer.
+
+The widget calls the same ONNX + halo-tiled StarDist inference used by `large_inference.py`. It currently keeps the 2000-pixel-per-side safety limit from the CLI MVP.
+
+For local development, validate the manifest:
+
+```bash
+uv run --with npe2 npe2 validate napari_organoid_seg/napari.yaml
+```
+
+Launch napari with the development plugin and ONNX Runtime available:
+
+```bash
+uv run --with napari --with onnxruntime napari
+```
+
+The widget looks for the model in this order:
+
+1. `ORGANOID_SEG_MODEL=/absolute/path/to/best.onnx`
+2. `napari_organoid_seg/models/best.onnx` for a future packaged model
+3. `models/best.onnx` in this repository for development
+
+For the current development workflow, keep the exported model at `models/best.onnx`.
+
 ## Evaluation
 
 Evaluate the best checkpoint on all test patches:
