@@ -42,7 +42,7 @@ def normalize_patch(image: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(normalized)
 
 
-def _sigmoid(logits: np.ndarray) -> np.ndarray:
+def sigmoid(logits: np.ndarray) -> np.ndarray:
     logits = np.asarray(logits, dtype=np.float32)
     out = np.empty_like(logits, dtype=np.float32)
     positive = logits >= 0
@@ -89,23 +89,44 @@ class OrganoidONNXPredictor:
                 f"{output_names}"
             )
 
-    def predict_dense(self, image_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Return probability (H,W) and ray distances (32,H,W)."""
-        normalized = normalize_patch(image_rgb)
-        batch = normalized.transpose(2, 0, 1)[None].astype(np.float32, copy=False)
+    def predict_batch_logits(
+        self,
+        images_rgb: list[np.ndarray],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return raw binary logits (B,H,W) and rays (B,32,H,W)."""
+        if not images_rgb:
+            raise ValueError("images_rgb must contain at least one patch")
+
+        batch = np.stack(
+            [
+                normalize_patch(image).transpose(2, 0, 1)
+                for image in images_rgb
+            ],
+            axis=0,
+        ).astype(np.float32, copy=False)
 
         binary_logits, ray_map = self.session.run(
             ["binary_map", "ray_map"],
             {"image": batch},
         )
 
-        probability = _sigmoid(binary_logits[0, 0])
-        rays = np.asarray(ray_map[0], dtype=np.float32)
+        logits = np.asarray(binary_logits[:, 0], dtype=np.float32)
+        rays = np.asarray(ray_map, dtype=np.float32)
 
-        if rays.shape != (N_RAYS, PATCH_SIZE, PATCH_SIZE):
+        expected_logits = (len(images_rgb), PATCH_SIZE, PATCH_SIZE)
+        expected_rays = (len(images_rgb), N_RAYS, PATCH_SIZE, PATCH_SIZE)
+        if logits.shape != expected_logits:
+            raise RuntimeError(f"Unexpected binary-logit shape: {logits.shape}")
+        if rays.shape != expected_rays:
             raise RuntimeError(f"Unexpected ray-map shape: {rays.shape}")
 
-        return probability, rays
+        return logits, rays
+
+    def predict_dense(self, image_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return probability (H,W) and ray distances (32,H,W)."""
+        logits, rays = self.predict_batch_logits([image_rgb])
+        probability = sigmoid(logits[0])
+        return probability, rays[0]
 
     def predict_patch(
         self,
