@@ -151,6 +151,25 @@ Outputs:
 - `models/best.pt` (best validation PQ)
 - `output/viz_epoch_*.png` (input, ground truth instances, predicted instances)
 
+
+## ONNX Export
+
+Export the dense StarDist network from `models/best.pt`:
+
+```bash
+uv run --with onnx --with onnxscript python export_onnx.py \
+  --ckpt models/best.pt \
+  --output models/best.onnx
+```
+
+The exported graph uses ONNX opset 18 with fixed 256x256 spatial dimensions and a dynamic batch axis. Its contract is:
+
+- input `image`: `[batch, 3, 256, 256]` float32, already min-max normalized to `[0, 1]`
+- output `binary_map`: `[batch, 1, 256, 256]` raw StarDist object-probability logits
+- output `ray_map`: `[batch, 32, 256, 256]` raw radial distances
+
+Sigmoid activation, StarDist polygon reconstruction, and NMS are intentionally kept outside the ONNX graph. The exporter runs `onnx.checker.check_model` after writing the file.
+
 ## Evaluation
 
 Evaluate the best checkpoint on all test patches:
