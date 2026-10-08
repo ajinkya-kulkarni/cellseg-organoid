@@ -28,6 +28,7 @@ from scipy.io import loadmat
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 
+from config import ENCODER, INSTANCE_IOU_THRESH, NMS_IOU_THRESH, N_RAYS, SCORE_THRESH
 from utils import DEVICE, create_stardist_model
 
 SEED = 42
@@ -36,8 +37,6 @@ OUT_DIR = Path(__file__).parent / "output"
 MODELS_DIR = Path(__file__).parent / "models"
 
 LR = 1e-3
-ENCODER = "efficientnet_b3"
-N_RAYS = 32
 ETA_MIN = 1e-6
 CLIP_NORM = 1.0
 
@@ -117,7 +116,7 @@ def dice_loss(logits, target, eps=1e-8):
     return 1.0 - (2.0 * intersection + eps) / (denominator + eps)
 
 
-def pq_stats(gt, pred, iou_thresh=0.5):
+def pq_stats(gt, pred, iou_thresh=INSTANCE_IOU_THRESH):
     """Return TP, FP, FN and matched-IoU sum for dataset-level PQ."""
     gt = remap_label(gt)
     pred = remap_label(pred)
@@ -153,8 +152,8 @@ def save_viz(loader, model, epoch, path):
     pred_inst = post_proc_stardist(
         pred_prob,
         pred_rays,
-        score_thresh=0.4,
-        iou_thresh=0.4,
+        score_thresh=SCORE_THRESH,
+        iou_thresh=NMS_IOU_THRESH,
         trim_bboxes=True,
         normalize=False,
     )
@@ -387,15 +386,15 @@ def main():
                     pred_inst = post_proc_stardist(
                         pred_prob[i],
                         pred_rays[i],
-                        score_thresh=0.4,
-                        iou_thresh=0.4,
+                        score_thresh=SCORE_THRESH,
+                        iou_thresh=NMS_IOU_THRESH,
                         trim_bboxes=True,
                         normalize=False,
                     )
                     tp, fp, fn, iou_sum = pq_stats(
                         gt_inst[i],
                         pred_inst,
-                        iou_thresh=0.5,
+                        iou_thresh=INSTANCE_IOU_THRESH,
                     )
                     pq_tp += tp
                     pq_fp += fp
