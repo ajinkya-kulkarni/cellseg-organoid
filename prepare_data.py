@@ -20,10 +20,11 @@ from scipy.io import savemat
 from skimage.segmentation import relabel_sequential
 from tqdm import tqdm
 
+from config import PATCH_SIZE
+
 DEFAULT_SOURCE_ZIP = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData-All.zip"
 DEFAULT_OUTPUT_DIR = "/Users/ajinkyakulkarni/Desktop/OrganoIDNetData-256"
 
-PATCH_SIZE = 256
 TRAIN_RATIO = 0.70
 VAL_RATIO = 0.15
 TEST_RATIO = 0.15
