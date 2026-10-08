@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.entry-points."napari.manifest"]
-napari-organoid-seg = "napari_organoid_seg:napari.yaml"
+cellseg-organoid = "napari_organoid_seg:napari.yaml"
 
 [tool.setuptools]
 py-modules = ["config", "onnx_inference", "stardist_postproc", "large_inference"]
