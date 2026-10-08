@@ -19,14 +19,12 @@ from cellseg_models_pytorch.utils import remap_label
 from scipy.io import loadmat
 from tqdm import tqdm
 
+from config import ENCODER, INSTANCE_IOU_THRESH, NMS_IOU_THRESH, SCORE_THRESH
 from utils import DEVICE, create_stardist_model
 
-ENCODER = "efficientnet_b3"
 OUT = Path(__file__).parent / "output"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
-IOU_THRESH = 0.5
-SCORE_THRESH = 0.4
-NMS_IOU_THRESH = 0.4
+IOU_THRESH = INSTANCE_IOU_THRESH
 N_VIZ = 5
 
 
