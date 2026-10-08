@@ -104,6 +104,8 @@ OrganoIDNetData-256/
   split_summary.json
 ```
 
+The temporary extracted full-resolution TIFFs are removed after patch generation; the manifest retains their source names.
+
 Labels are MATLAB `.mat` files with:
 
 - `inst`: integer instance labels
@@ -171,17 +173,6 @@ The exported graph uses ONNX opset 18 with fixed 256x256 spatial dimensions and 
 Sigmoid activation, StarDist polygon reconstruction, and NMS are intentionally kept outside the ONNX graph. The exporter runs `onnx.checker.check_model` after writing the file.
 
 
-Verify dense-output and final-instance parity on real Validation patches:
-
-```bash
-uv run --with onnxruntime python verify_onnx.py \
-  --data-root /path/to/OrganoIDNetData-256 \
-  --ckpt models/best.pt \
-  --onnx models/best.onnx \
-  --num-patches 32
-```
-
-The check runs both backends on CPU, compares binary logits and ray maps with `rtol=1e-4` / `atol=2e-4`, and requires pixel-identical final StarDist instance masks. It also compares the existing cellseg-models-pytorch reference postprocessing against the lightweight deployment postprocessing.
 
 Standalone 256x256 ONNX inference is available through `OrganoidONNXPredictor` in `onnx_inference.py`. This inference path imports neither PyTorch nor cellseg-models-pytorch:
 
@@ -200,6 +191,23 @@ uv run --with onnxruntime python onnx_inference.py \
   --image /path/to/256x256.png \
   --output output/onnx_patch_labels.npy
 ```
+
+
+## Large-image ONNX Inference
+
+Full-resolution inference uses the same fixed 256x256 ONNX model with a regular overlapping tile grid. Each tile is min-max normalized independently, matching training. With the default 64-pixel overlap, 32 pixels are treated as halo on each internal tile edge; only trusted tile interiors are copied into the global dense StarDist maps. Sigmoid and StarDist reconstruction/NMS are then run once globally.
+
+```bash
+uv run --with onnxruntime python large_inference.py \
+  --model models/best.onnx \
+  --image /path/to/full_image.tif \
+  --output output/full_labels.npy \
+  --preview output/full_preview.png \
+  --overlap 64 \
+  --batch-size 16
+```
+
+The CLI defaults to a 2000-pixel maximum image side as a memory-safety guard. Pass `--max-dim 0` to disable the guard or a larger value to raise it.
 
 
 ## Evaluation
