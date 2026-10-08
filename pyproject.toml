@@ -29,7 +29,13 @@ dependencies = [
 cellseg-organoid = "napari_organoid_seg:napari.yaml"
 
 [tool.setuptools]
-py-modules = ["config", "onnx_inference", "stardist_postproc", "large_inference", "measurements"]
+py-modules = [
+    "config",
+    "onnx_inference",
+    "stardist_postproc",
+    "large_inference",
+    "measurements",
+]
 include-package-data = true
 
 [tool.setuptools.packages.find]
