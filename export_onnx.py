@@ -14,11 +14,9 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
+from config import ENCODER, N_RAYS, PATCH_SIZE
 from utils import create_stardist_model
 
-ENCODER = "efficientnet_b3"
-N_RAYS = 32
-PATCH_SIZE = 256
 OPSET_VERSION = 18
 
 
