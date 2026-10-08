@@ -17,6 +17,8 @@ from scipy.spatial import KDTree
 from skimage.draw import polygon
 from skimage.morphology import disk, erosion
 
+from config import NMS_IOU_THRESH, SCORE_THRESH
+
 
 @njit(cache=True, fastmath=True)
 def _intersection(box_a: np.ndarray, box_b: np.ndarray) -> float:
@@ -183,8 +185,8 @@ def _polygons_to_label(
 def post_proc_stardist(
     probability: np.ndarray,
     ray_map: np.ndarray,
-    score_thresh: float = 0.4,
-    iou_thresh: float = 0.4,
+    score_thresh: float = SCORE_THRESH,
+    iou_thresh: float = NMS_IOU_THRESH,
     trim_bboxes: bool = True,
 ) -> np.ndarray:
     """Convert dense StarDist outputs into a 2D int32 instance-label mask."""
