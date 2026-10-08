@@ -1,17 +1,20 @@
-"""Large-image ONNX inference by stitching dense StarDist outputs.
+"""Large-image ONNX inference with halo-cropped dense StarDist stitching.
 
 Pipeline:
   RGB image
-    -> overlapping 256x256 tiles
+    -> regular overlapping 256x256 tile grid
+    -> reflect-pad only where the grid extends beyond the image
     -> batched ONNX inference
-    -> weighted blending of raw binary logits + ray maps
+    -> discard unreliable internal tile borders (halo)
+    -> copy trusted dense logits + ray maps into one global canvas
     -> sigmoid on the stitched logits
     -> one global StarDist postprocess
 
-This avoids per-tile instance-ID merging.
+This avoids both per-tile instance merging and averaging edge predictions.
 """
 
 import argparse
+import math
 from pathlib import Path
 
 import cv2
@@ -29,10 +32,18 @@ from stardist_postproc import post_proc_stardist
 OVERLAP = 64
 DEFAULT_BATCH_SIZE = 16
 DEFAULT_MAX_DIM = 2000
+N_RAYS = 32
 
 
 def patch_starts(dim_size: int, patch_size: int, overlap: int) -> list[int]:
-    """Return tile starts that cover the full dimension."""
+    """Return starts on a regular stride grid that fully covers a dimension.
+
+    The final tile may extend beyond the image. It is reflect-padded during
+    extraction instead of being shifted backwards, which keeps every internal
+    overlap exactly equal to the requested overlap.
+    """
+    if dim_size <= 0:
+        raise ValueError("dim_size must be greater than zero")
     if patch_size <= 0:
         raise ValueError("patch_size must be greater than zero")
     if overlap < 0 or overlap >= patch_size:
@@ -42,21 +53,14 @@ def patch_starts(dim_size: int, patch_size: int, overlap: int) -> list[int]:
         return [0]
 
     stride = patch_size - overlap
-    starts = list(range(0, dim_size - patch_size + 1, stride))
-    if starts[-1] + patch_size < dim_size:
-        starts.append(dim_size - patch_size)
-    return starts
+    n_steps = math.ceil((dim_size - patch_size) / stride)
+    return [step * stride for step in range(n_steps + 1)]
 
 
-def _blend_window(size: int = PATCH_SIZE, edge_weight: float = 0.05) -> np.ndarray:
-    """Raised-cosine 2D tile weight with non-zero image-edge support."""
-    if not 0.0 < edge_weight <= 1.0:
-        raise ValueError("edge_weight must be in (0, 1]")
-
-    one_d = np.hanning(size).astype(np.float32)
-    one_d = edge_weight + (1.0 - edge_weight) * one_d
-    window = np.outer(one_d, one_d).astype(np.float32)
-    return window
+def padded_dim(dim_size: int, patch_size: int, overlap: int) -> int:
+    """Size covered by the regular tile grid before cropping back to the image."""
+    starts = patch_starts(dim_size, patch_size, overlap)
+    return starts[-1] + patch_size
 
 
 def _extract_tile(
@@ -64,21 +68,25 @@ def _extract_tile(
     y: int,
     x: int,
     patch_size: int,
-) -> tuple[np.ndarray, int, int]:
-    """Extract one tile and pad bottom/right when the image is smaller than a tile."""
+) -> np.ndarray:
+    """Extract one tile and reflect-pad bottom/right to exactly patch_size."""
     height, width = image_rgb.shape[:2]
     valid_h = min(patch_size, height - y)
     valid_w = min(patch_size, width - x)
 
-    tile = image_rgb[y : y + valid_h, x : x + valid_w]
+    if valid_h <= 0 or valid_w <= 0:
+        raise RuntimeError(
+            f"Tile start ({x}, {y}) lies outside image {width}x{height}"
+        )
 
-    if valid_h == patch_size and valid_w == patch_size:
-        return tile, valid_h, valid_w
+    tile = image_rgb[y : y + valid_h, x : x + valid_w]
 
     pad_bottom = patch_size - valid_h
     pad_right = patch_size - valid_w
+    if pad_bottom == 0 and pad_right == 0:
+        return tile
 
-    tile = cv2.copyMakeBorder(
+    return cv2.copyMakeBorder(
         tile,
         0,
         pad_bottom,
@@ -86,7 +94,24 @@ def _extract_tile(
         pad_right,
         borderType=cv2.BORDER_REFLECT_101,
     )
-    return tile, valid_h, valid_w
+
+
+def _trusted_slice(
+    tile_index: int,
+    n_tiles: int,
+    patch_size: int,
+    overlap: int,
+) -> slice:
+    """Return the trusted tile interval after splitting overlap into halos."""
+    if n_tiles == 1:
+        return slice(0, patch_size)
+
+    crop_before = overlap // 2
+    crop_after = overlap - crop_before
+
+    start = 0 if tile_index == 0 else crop_before
+    stop = patch_size if tile_index == n_tiles - 1 else patch_size - crop_after
+    return slice(start, stop)
 
 
 def predict_large_dense(
@@ -96,7 +121,7 @@ def predict_large_dense(
     overlap: int = OVERLAP,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return stitched raw logits (H,W) and ray maps (32,H,W)."""
+    """Return halo-stitched raw logits (H,W) and ray maps (32,H,W)."""
     image_rgb = np.asarray(image_rgb)
 
     if image_rgb.ndim == 2:
@@ -120,10 +145,12 @@ def predict_large_dense(
     x_starts = patch_starts(width, patch_size, overlap)
     y_starts = patch_starts(height, patch_size, overlap)
 
-    weights = _blend_window(patch_size)
-    logit_sum = np.zeros((height, width), dtype=np.float32)
-    ray_sum = np.zeros((32, height, width), dtype=np.float32)
-    weight_sum = np.zeros((height, width), dtype=np.float32)
+    canvas_h = padded_dim(height, patch_size, overlap)
+    canvas_w = padded_dim(width, patch_size, overlap)
+
+    logits = np.empty((canvas_h, canvas_w), dtype=np.float32)
+    rays = np.empty((N_RAYS, canvas_h, canvas_w), dtype=np.float32)
+    coverage = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
 
     tiles: list[np.ndarray] = []
     metadata: list[tuple[int, int, int, int]] = []
@@ -135,45 +162,44 @@ def predict_large_dense(
 
         logits_batch, rays_batch = predictor.predict_batch_logits(tiles)
 
-        for idx, (y, x, valid_h, valid_w) in enumerate(metadata):
-            weight = weights[:valid_h, :valid_w]
-            y_slice = slice(y, y + valid_h)
-            x_slice = slice(x, x + valid_w)
+        for batch_index, (iy, ix, y, x) in enumerate(metadata):
+            src_y = _trusted_slice(iy, len(y_starts), patch_size, overlap)
+            src_x = _trusted_slice(ix, len(x_starts), patch_size, overlap)
 
-            logit_sum[y_slice, x_slice] += (
-                logits_batch[idx, :valid_h, :valid_w] * weight
-            )
-            ray_sum[:, y_slice, x_slice] += (
-                rays_batch[idx, :, :valid_h, :valid_w] * weight[None]
-            )
-            weight_sum[y_slice, x_slice] += weight
+            dst_y = slice(y + src_y.start, y + src_y.stop)
+            dst_x = slice(x + src_x.start, x + src_x.stop)
+
+            logits[dst_y, dst_x] = logits_batch[batch_index, src_y, src_x]
+            rays[:, dst_y, dst_x] = rays_batch[
+                batch_index, :, src_y, src_x
+            ]
+            coverage[dst_y, dst_x] += 1
 
         tiles = []
         metadata = []
 
-    for y in y_starts:
-        for x in x_starts:
-            tile, valid_h, valid_w = _extract_tile(
-                image_rgb,
-                y,
-                x,
-                patch_size,
-            )
-            tiles.append(tile)
-            metadata.append((y, x, valid_h, valid_w))
+    for iy, y in enumerate(y_starts):
+        for ix, x in enumerate(x_starts):
+            tiles.append(_extract_tile(image_rgb, y, x, patch_size))
+            metadata.append((iy, ix, y, x))
 
             if len(tiles) >= batch_size:
                 flush()
 
     flush()
 
-    if np.any(weight_sum <= 0):
-        raise RuntimeError("Dense stitching left uncovered pixels")
+    if not np.all(coverage == 1):
+        uncovered = int(np.count_nonzero(coverage == 0))
+        duplicated = int(np.count_nonzero(coverage > 1))
+        raise RuntimeError(
+            "Halo stitching coverage error: "
+            f"{uncovered} uncovered pixels, {duplicated} duplicated pixels"
+        )
 
-    logits = logit_sum / weight_sum
-    rays = ray_sum / weight_sum[None]
-
-    return logits.astype(np.float32, copy=False), rays.astype(np.float32, copy=False)
+    return (
+        logits[:height, :width].astype(np.float32, copy=False),
+        rays[:, :height, :width].astype(np.float32, copy=False),
+    )
 
 
 def predict_large_image(
@@ -238,7 +264,7 @@ def _save_preview(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run tiled ONNX StarDist inference on a full RGB image"
+        description="Run halo-tiled ONNX StarDist inference on a full RGB image"
     )
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--image", type=Path, required=True)
@@ -301,13 +327,19 @@ def main() -> None:
         args.preview.parent.mkdir(parents=True, exist_ok=True)
         _save_preview(image_rgb, labels, args.preview)
 
-    x_tiles = len(patch_starts(width, PATCH_SIZE, args.overlap))
-    y_tiles = len(patch_starts(height, PATCH_SIZE, args.overlap))
+    x_starts = patch_starts(width, PATCH_SIZE, args.overlap)
+    y_starts = patch_starts(height, PATCH_SIZE, args.overlap)
 
     print(f"Image:       {width}x{height}")
-    print(f"Tiles:       {x_tiles} x {y_tiles} = {x_tiles * y_tiles}")
+    print(f"Tiles:       {len(x_starts)} x {len(y_starts)} = {len(x_starts) * len(y_starts)}")
     print(f"Patch:       {PATCH_SIZE}")
     print(f"Overlap:     {args.overlap}")
+    print(f"Halo:        {args.overlap // 2} / {args.overlap - args.overlap // 2}")
+    print(
+        "Padded grid: "
+        f"{padded_dim(width, PATCH_SIZE, args.overlap)}x"
+        f"{padded_dim(height, PATCH_SIZE, args.overlap)}"
+    )
     print(f"Batch size:  {args.batch_size}")
     print(f"Instances:   {len(np.unique(labels)) - 1}")
     print(f"Labels:      {args.output}")
