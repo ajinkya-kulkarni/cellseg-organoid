@@ -33,7 +33,7 @@ from utils import DEVICE, create_stardist_model
 
 SEED = 42
 
-OUT_DIR = Path(__file__).parent / "output"
+OUT_DIR = Path(__file__).parent / "output" / "train"
 MODELS_DIR = Path(__file__).parent / "models"
 
 LR = 1e-3
@@ -64,6 +64,8 @@ class OrganoidDataset(Dataset):
 
     def __getitem__(self, idx):
         img = cv2.imread(str(self.img_paths[idx]))
+        if img is None:
+            raise RuntimeError(f"Could not read image: {self.img_paths[idx]}")
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         mat = loadmat(str(self.label_paths[idx]))
