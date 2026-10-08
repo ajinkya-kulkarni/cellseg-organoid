@@ -5,7 +5,13 @@ contributions:
     - id: cellseg-organoid.segment_organoids
       title: Segment organoids
       python_name: napari_organoid_seg._widget:segment_organoids
+    - id: cellseg-organoid.measure_organoids
+      title: Measure organoids
+      python_name: napari_organoid_seg._measure_widget:measure_organoids
   widgets:
     - command: cellseg-organoid.segment_organoids
       display_name: Organoid Segmentation
+      autogenerate: true
+    - command: cellseg-organoid.measure_organoids
+      display_name: Measure Organoids
       autogenerate: true
