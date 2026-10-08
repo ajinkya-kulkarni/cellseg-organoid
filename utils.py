@@ -3,6 +3,8 @@
 import torch
 from cellseg_models_pytorch.models.stardist.stardist_unet import stardist_nuclei
 
+from config import ENCODER, N_RAYS
+
 if torch.cuda.is_available():
     DEVICE = "cuda"
 elif torch.backends.mps.is_available():
@@ -12,9 +14,9 @@ else:
 
 
 def create_stardist_model(
-    enc_name="efficientnet_b3",
+    enc_name=ENCODER,
     enc_pretrain=True,
-    n_rays=32,
+    n_rays=N_RAYS,
 ):
     return stardist_nuclei(
         n_rays=n_rays,
