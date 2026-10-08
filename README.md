@@ -145,13 +145,13 @@ uv run python train.py \
 
 Omit `--sub-size` and `--val-sub-size` for the real run so the full training and validation splits are used.
 
-Note: `train.py` removes and recreates the `output/` and `models/` directories before starting, so old checkpoints and visualizations are cleared.
+Note: `train.py` removes and recreates `output/train/` and `models/` before starting, so old training visualizations and checkpoints are cleared without deleting inference or evaluation outputs.
 
 Outputs:
 
 - `models/last.pt`
 - `models/best.pt` (best validation PQ)
-- `output/viz_epoch_*.png` (input, ground truth instances, predicted instances)
+- `output/train/viz_epoch_*.png` (input, ground truth instances, predicted instances)
 
 
 ## ONNX Export
@@ -226,12 +226,12 @@ uv run python evaluate.py --data-root /path/to/OrganoIDNetData-256 --ckpt models
 
 Evaluation uses the same StarDist post-processing defaults as validation (`score_thresh=0.4`, NMS IoU `0.4`) and reports binary Dice/IoU, count error, instance precision/recall/F1, and dataset-level PQ/DQ/SQ at instance IoU > 0.5.
 
-Note: `evaluate.py` removes and recreates the `output/` directory before writing results.
+Note: `evaluate.py` removes and recreates only `output/eval/` before writing results.
 
 Outputs:
 
-- `output/metrics.csv`
-- `output/pred_*.png` (input, ground truth instances, predicted instances)
+- `output/eval/metrics.csv`
+- `output/eval/pred_*.png` (input, ground truth instances, predicted instances)
 
 For empty ground-truth patches, perfect empty predictions score Dice and IoU as `1.0`.
 
