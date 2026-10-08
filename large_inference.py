@@ -108,14 +108,18 @@ def _trusted_slice(
     return slice(start, stop)
 
 
-def predict_large_dense(
+def iter_large_dense(
     predictor: OrganoidONNXPredictor,
     image_rgb: np.ndarray,
     patch_size: int = PATCH_SIZE,
     overlap: int = OVERLAP,
     batch_size: int = DEFAULT_BATCH_SIZE,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return halo-stitched raw logits (H,W) and ray maps (32,H,W)."""
+):
+    """Yield tile progress and return halo-stitched dense StarDist outputs.
+
+    Yields once per completed tile so GUI callers can report progress without
+    changing the synchronous inference result.
+    """
     image_rgb = np.asarray(image_rgb)
 
     if image_rgb.ndim == 2:
@@ -148,13 +152,16 @@ def predict_large_dense(
 
     tiles: list[np.ndarray] = []
     metadata: list[tuple[int, int, int, int]] = []
+    completed_tiles = 0
+    total_tiles = len(x_starts) * len(y_starts)
 
-    def flush() -> None:
+    def flush() -> int:
         nonlocal tiles, metadata
         if not tiles:
-            return
+            return 0
 
         logits_batch, rays_batch = predictor.predict_batch_logits(tiles)
+        batch_count = len(metadata)
 
         for batch_index, (iy, ix, y, x) in enumerate(metadata):
             src_y = _trusted_slice(iy, len(y_starts), patch_size, overlap)
@@ -171,6 +178,7 @@ def predict_large_dense(
 
         tiles = []
         metadata = []
+        return batch_count
 
     for iy, y in enumerate(y_starts):
         for ix, x in enumerate(x_starts):
@@ -178,9 +186,15 @@ def predict_large_dense(
             metadata.append((iy, ix, y, x))
 
             if len(tiles) >= batch_size:
-                flush()
+                flushed = flush()
+                for _ in range(flushed):
+                    completed_tiles += 1
+                    yield completed_tiles, total_tiles
 
-    flush()
+    flushed = flush()
+    for _ in range(flushed):
+        completed_tiles += 1
+        yield completed_tiles, total_tiles
 
     if not np.all(coverage == 1):
         uncovered = int(np.count_nonzero(coverage == 0))
@@ -196,16 +210,44 @@ def predict_large_dense(
     )
 
 
-def predict_large_image(
+def _consume_generator(generator):
+    """Run a progress-yielding generator synchronously and return its result."""
+    while True:
+        try:
+            next(generator)
+        except StopIteration as stop:
+            return stop.value
+
+
+def predict_large_dense(
+    predictor: OrganoidONNXPredictor,
+    image_rgb: np.ndarray,
+    patch_size: int = PATCH_SIZE,
+    overlap: int = OVERLAP,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return halo-stitched raw logits (H,W) and ray maps (32,H,W)."""
+    return _consume_generator(
+        iter_large_dense(
+            predictor,
+            image_rgb,
+            patch_size=patch_size,
+            overlap=overlap,
+            batch_size=batch_size,
+        )
+    )
+
+
+def iter_large_image(
     predictor: OrganoidONNXPredictor,
     image_rgb: np.ndarray,
     overlap: int = OVERLAP,
     batch_size: int = DEFAULT_BATCH_SIZE,
     score_thresh: float = SCORE_THRESH,
     nms_iou_thresh: float = NMS_IOU_THRESH,
-) -> np.ndarray:
-    """Return a full-resolution int32 instance-label mask."""
-    logits, rays = predict_large_dense(
+):
+    """Yield tile progress, then return the full-resolution label mask."""
+    logits, rays = yield from iter_large_dense(
         predictor,
         image_rgb,
         patch_size=PATCH_SIZE,
@@ -221,7 +263,31 @@ def predict_large_image(
         iou_thresh=nms_iou_thresh,
         trim_bboxes=True,
     )
+
+    # One final work unit represents global StarDist reconstruction/NMS.
+    yield None
     return labels.astype(np.int32, copy=False)
+
+
+def predict_large_image(
+    predictor: OrganoidONNXPredictor,
+    image_rgb: np.ndarray,
+    overlap: int = OVERLAP,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    score_thresh: float = SCORE_THRESH,
+    nms_iou_thresh: float = NMS_IOU_THRESH,
+) -> np.ndarray:
+    """Return a full-resolution int32 instance-label mask."""
+    return _consume_generator(
+        iter_large_image(
+            predictor,
+            image_rgb,
+            overlap=overlap,
+            batch_size=batch_size,
+            score_thresh=score_thresh,
+            nms_iou_thresh=nms_iou_thresh,
+        )
+    )
 
 
 def _save_preview(
