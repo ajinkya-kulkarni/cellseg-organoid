@@ -14,6 +14,9 @@ dependencies = [
     "tqdm",
 ]
 
+[tool.uv]
+override-dependencies = ["opencv-python; python_version < '0'"]
+
 [tool.mypy]
 ignore_missing_imports = true
 
