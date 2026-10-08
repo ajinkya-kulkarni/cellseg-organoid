@@ -64,7 +64,7 @@ def predict(model, img_rgb):
     return instances
 
 
-def pq_stats(gt, pred, iou_thresh=0.5):
+def pq_stats(gt, pred, iou_thresh=IOU_THRESH):
     """Return TP, FP, FN and matched-IoU sum for dataset-level PQ."""
     gt = remap_label(gt)
     pred = remap_label(pred)
