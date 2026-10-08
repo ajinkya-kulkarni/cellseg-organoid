@@ -127,7 +127,7 @@ def match_instances(pred_inst, gt_inst):
     pairs = []
     for i, j in zip(gt_idx, pred_idx):
         iou = 1 - cost[i, j]
-        if iou >= IOU_THRESH:
+        if iou > IOU_THRESH:
             tp += 1
             pairs.append((gt_ids[i], pred_ids[j], iou))
     fp = len(pred_ids) - tp
@@ -209,7 +209,7 @@ def print_section(
     print(f"    Pred count: {pred_arr.mean():.1f} ± {pred_arr.std():.1f}")
     print(f"    Bias:       {pred_arr.mean() - gt_arr.mean():.1f}")
     print(f"    |Error|:    {ce_arr.mean():.2f} ± {ce_arr.std():.2f}  (median {np.median(ce_arr):.1f})")
-    print(f"  Instance matching @ IoU ≥ {IOU_THRESH}:")
+    print(f"  Instance matching @ IoU > {IOU_THRESH}:")
     print(f"    Precision:  {p:.4f}")
     print(f"    Recall:     {r:.4f}")
     print(f"    F1:         {f:.4f}")
