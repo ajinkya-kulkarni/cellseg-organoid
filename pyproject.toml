@@ -1,8 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "cellseg-organoid"
 version = "0.1.0"
+description = "StarDist organoid instance segmentation with napari integration"
+readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
+classifiers = [
+    "Framework :: napari",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
 dependencies = [
     "cellseg-models-pytorch>=0.1.30",
     "albumentations>=2.0.8",
@@ -13,6 +24,19 @@ dependencies = [
     "scipy",
     "tqdm",
 ]
+
+[project.entry-points."napari.manifest"]
+napari-organoid-seg = "napari_organoid_seg:napari.yaml"
+
+[tool.setuptools]
+py-modules = ["config", "onnx_inference", "stardist_postproc", "large_inference"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["napari_organoid_seg*"]
+
+[tool.setuptools.package-data]
+napari_organoid_seg = ["napari.yaml", "models/*.onnx"]
 
 [tool.uv]
 override-dependencies = ["opencv-python; python_version < '0'"]
