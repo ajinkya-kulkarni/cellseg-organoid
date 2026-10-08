@@ -213,15 +213,18 @@ The CLI defaults to a 2000-pixel maximum image side as a memory-safety guard. Pa
 
 ## napari MVP
 
-The repo now exposes an npe2 napari plugin named **Organoid Segmentation**. The first MVP intentionally has one workflow:
+The repo exposes an npe2 napari plugin named **Organoid Segmentation** with two small actions:
 
 1. Open a 2D grayscale or RGB image in napari.
 2. Open **Plugins → Organoid Segmentation → Organoid Segmentation**.
-3. Choose the image layer.
-4. Run the widget.
-5. The segmentation is added as an editable Labels layer.
+3. Choose the image layer and run the widget.
+4. The segmentation is added as an editable Labels layer.
+5. After any manual label edits, open **Plugins → Organoid Segmentation → Measure Organoids**.
+6. Choose the Labels layer, choose the CSV path, and run the widget.
 
-The widget calls the same ONNX + halo-tiled StarDist inference used by `large_inference.py`. Inference runs on a napari worker thread, so the viewer remains responsive. Napari shows progress for each completed tile plus the final global StarDist reconstruction step. The widget currently keeps the 2000-pixel-per-side safety limit from the CLI MVP.
+Segmentation calls the same ONNX + halo-tiled StarDist inference used by `large_inference.py`. Inference runs on a napari worker thread, so the viewer remains responsive. The widget currently keeps the 2000-pixel-per-side safety limit from the CLI MVP.
+
+The measurement action computes one row per organoid with `label`, area, equivalent diameter, Crofton perimeter, circularity, solidity, eccentricity, and centroid X/Y. These measurements are attached to the Labels layer as napari features and exported to CSV. A notification reports organoid count plus median area, equivalent diameter, and circularity. Re-run the measurement action after editing labels so the exported measurements match the current mask.
 
 For local development, validate the manifest:
 
