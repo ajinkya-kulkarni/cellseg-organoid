@@ -9,12 +9,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from config import NMS_IOU_THRESH, N_RAYS, PATCH_SIZE, SCORE_THRESH
 from stardist_postproc import post_proc_stardist
-
-PATCH_SIZE = 256
-N_RAYS = 32
-SCORE_THRESH = 0.4
-NMS_IOU_THRESH = 0.4
 
 
 def normalize_patch(image: np.ndarray) -> np.ndarray:
