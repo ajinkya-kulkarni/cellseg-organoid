@@ -181,7 +181,26 @@ uv run --with onnxruntime python verify_onnx.py \
   --num-patches 32
 ```
 
-The check runs both backends on CPU, compares binary logits and ray maps with `rtol=1e-4` / `atol=1e-5`, and requires pixel-identical final StarDist instance masks.
+The check runs both backends on CPU, compares binary logits and ray maps with `rtol=1e-4` / `atol=2e-4`, and requires pixel-identical final StarDist instance masks. It also compares the existing cellseg-models-pytorch reference postprocessing against the lightweight deployment postprocessing.
+
+Standalone 256x256 ONNX inference is available through `OrganoidONNXPredictor` in `onnx_inference.py`. This inference path imports neither PyTorch nor cellseg-models-pytorch:
+
+```python
+from onnx_inference import OrganoidONNXPredictor
+
+predictor = OrganoidONNXPredictor("models/best.onnx")
+labels = predictor.predict_patch(image_rgb)
+```
+
+For a single PNG patch:
+
+```bash
+uv run --with onnxruntime python onnx_inference.py \
+  --model models/best.onnx \
+  --image /path/to/256x256.png \
+  --output output/onnx_patch_labels.npy
+```
+
 
 ## Evaluation
 
