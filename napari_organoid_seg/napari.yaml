@@ -1,0 +1,11 @@
+name: napari-organoid-seg
+display_name: Organoid Segmentation
+contributions:
+  commands:
+    - id: napari-organoid-seg.segment_organoids
+      title: Segment organoids
+      python_name: napari_organoid_seg._widget:segment_organoids
+  widgets:
+    - command: napari-organoid-seg.segment_organoids
+      display_name: Organoid Segmentation
+      autogenerate: true
