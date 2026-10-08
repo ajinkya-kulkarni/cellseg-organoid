@@ -52,16 +52,16 @@ def predict(model, img_rgb):
 
     out = model(tensor)
 
-    dist_logits = out["nuc"].binary_map[0, 0]
+    prob = torch.sigmoid(out["nuc"].binary_map[0, 0])
     rays = out["nuc"].aux_map[0]
 
     instances = post_proc_stardist(
-        dist_logits.cpu().numpy(),
+        prob.cpu().numpy(),
         rays.cpu().numpy(),
         score_thresh=SCORE_THRESH,
         iou_thresh=NMS_IOU_THRESH,
         trim_bboxes=True,
-        normalize=True,
+        normalize=False,
     )
 
     return instances
