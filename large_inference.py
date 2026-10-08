@@ -20,19 +20,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from onnx_inference import (
-    NMS_IOU_THRESH,
-    PATCH_SIZE,
-    SCORE_THRESH,
-    OrganoidONNXPredictor,
-    sigmoid,
-)
+from config import NMS_IOU_THRESH, N_RAYS, PATCH_SIZE, SCORE_THRESH, TILE_OVERLAP
+from onnx_inference import OrganoidONNXPredictor, sigmoid
 from stardist_postproc import post_proc_stardist
 
-OVERLAP = 64
+OVERLAP = TILE_OVERLAP
 DEFAULT_BATCH_SIZE = 16
 DEFAULT_MAX_DIM = 2000
-N_RAYS = 32
 
 
 def patch_starts(dim_size: int, patch_size: int, overlap: int) -> list[int]:
