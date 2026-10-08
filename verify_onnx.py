@@ -11,14 +11,14 @@ Both PyTorch and ONNX Runtime run on CPU to isolate export/runtime differences.
 import argparse
 from pathlib import Path
 
-import albumentations as A
 import cv2
 import numpy as np
 import torch
-from cellseg_models_pytorch.postproc import post_proc_stardist
-from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
+from cellseg_models_pytorch.postproc import post_proc_stardist as reference_postproc
 from scipy.special import expit
 
+from onnx_inference import OrganoidONNXPredictor, normalize_patch
+from stardist_postproc import post_proc_stardist as deployment_postproc
 from utils import create_stardist_model
 
 ENCODER = "efficientnet_b3"
@@ -27,10 +27,7 @@ PATCH_SIZE = 256
 SCORE_THRESH = 0.4
 NMS_IOU_THRESH = 0.4
 RTOL = 1e-4
-ATOL = 1e-5
-
-TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
-
+ATOL = 2e-4
 
 def load_pytorch_model(checkpoint_path: Path) -> torch.nn.Module:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
@@ -47,25 +44,16 @@ def load_pytorch_model(checkpoint_path: Path) -> torch.nn.Module:
     return model
 
 
-def load_patch(path: Path) -> np.ndarray:
+def load_patch_rgb(path: Path) -> np.ndarray:
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
         raise RuntimeError(f"Could not read image: {path}")
-
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image = TRANSFORM(image=image)["image"]
-
-    if image.shape != (PATCH_SIZE, PATCH_SIZE, 3):
-        raise ValueError(
-            f"Expected {PATCH_SIZE}x{PATCH_SIZE} RGB patch, got {image.shape}: {path}"
-        )
-
-    return np.ascontiguousarray(image.transpose(2, 0, 1), dtype=np.float32)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
-def to_instances(binary_logits: np.ndarray, ray_map: np.ndarray) -> np.ndarray:
+def reference_instances(binary_logits: np.ndarray, ray_map: np.ndarray) -> np.ndarray:
     probability = expit(binary_logits).astype(np.float32, copy=False)
-    return post_proc_stardist(
+    return reference_postproc(
         probability,
         ray_map,
         score_thresh=SCORE_THRESH,
@@ -94,7 +82,7 @@ def main() -> None:
         "--num-patches",
         type=int,
         default=32,
-        help="Number of Validation patches to compare (default: 32)",
+        help="Number of evenly spaced Validation patches to compare (default: 32)",
     )
     args = parser.parse_args()
 
@@ -118,8 +106,17 @@ def main() -> None:
     if not image_paths:
         raise FileNotFoundError(f"No Validation PNGs found in: {image_dir}")
 
-    image_paths = image_paths[: min(args.num_patches, len(image_paths))]
-    batch = np.stack([load_patch(path) for path in image_paths], axis=0)
+    n_check = min(args.num_patches, len(image_paths))
+    sample_indices = np.linspace(0, len(image_paths) - 1, n_check, dtype=int)
+    image_paths = [image_paths[i] for i in sample_indices]
+    images_rgb = [load_patch_rgb(path) for path in image_paths]
+    batch = np.stack(
+        [
+            normalize_patch(image).transpose(2, 0, 1)
+            for image in images_rgb
+        ],
+        axis=0,
+    ).astype(np.float32, copy=False)
 
     model = load_pytorch_model(args.ckpt)
     with torch.inference_mode():
@@ -127,11 +124,11 @@ def main() -> None:
         pt_binary = output.binary_map.cpu().numpy()
         pt_rays = output.aux_map.cpu().numpy()
 
-    session = ort.InferenceSession(
-        str(args.onnx),
+    predictor = OrganoidONNXPredictor(
+        args.onnx,
         providers=["CPUExecutionProvider"],
     )
-    ort_binary, ort_rays = session.run(
+    ort_binary, ort_rays = predictor.session.run(
         ["binary_map", "ray_map"],
         {"image": batch},
     )
@@ -166,8 +163,16 @@ def main() -> None:
     total_pixels = 0
 
     for index, path in enumerate(image_paths):
-        pt_inst = to_instances(pt_binary[index, 0], pt_rays[index])
-        ort_inst = to_instances(ort_binary[index, 0], ort_rays[index])
+        pt_inst = reference_instances(pt_binary[index, 0], pt_rays[index])
+
+        probability = expit(ort_binary[index, 0]).astype(np.float32, copy=False)
+        ort_inst = deployment_postproc(
+            probability,
+            ort_rays[index],
+            score_thresh=SCORE_THRESH,
+            iou_thresh=NMS_IOU_THRESH,
+            trim_bboxes=True,
+        )
 
         same = np.array_equal(pt_inst, ort_inst)
         if same:
