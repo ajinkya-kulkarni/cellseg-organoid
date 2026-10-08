@@ -7,3 +7,4 @@ __pycache__/
 models/
 train*.log
 output/
+cellseg_organoid.egg-info/
