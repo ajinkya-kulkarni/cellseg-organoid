@@ -221,7 +221,7 @@ The repo now exposes an npe2 napari plugin named **Organoid Segmentation**. The 
 4. Run the widget.
 5. The segmentation is added as an editable Labels layer.
 
-The widget calls the same ONNX + halo-tiled StarDist inference used by `large_inference.py`. It currently keeps the 2000-pixel-per-side safety limit from the CLI MVP.
+The widget calls the same ONNX + halo-tiled StarDist inference used by `large_inference.py`. Inference runs on a napari worker thread, so the viewer remains responsive. Napari shows progress for each completed tile plus the final global StarDist reconstruction step. The widget currently keeps the 2000-pixel-per-side safety limit from the CLI MVP.
 
 For local development, validate the manifest:
 
@@ -232,7 +232,12 @@ uv run --with npe2 npe2 validate napari_organoid_seg/napari.yaml
 Launch napari with the development plugin and ONNX Runtime available:
 
 ```bash
-uv run --with napari --with onnxruntime napari
+uv run \
+  --with "napari[pyqt6]" \
+  --with onnxruntime \
+  --with "numpy==1.26.4" \
+  --with "imagecodecs==2024.6.1" \
+  napari
 ```
 
 The widget looks for the model in this order:
