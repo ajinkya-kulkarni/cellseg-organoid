@@ -170,6 +170,19 @@ The exported graph uses ONNX opset 18 with fixed 256x256 spatial dimensions and 
 
 Sigmoid activation, StarDist polygon reconstruction, and NMS are intentionally kept outside the ONNX graph. The exporter runs `onnx.checker.check_model` after writing the file.
 
+
+Verify dense-output and final-instance parity on real Validation patches:
+
+```bash
+uv run --with onnxruntime python verify_onnx.py \
+  --data-root /path/to/OrganoIDNetData-256 \
+  --ckpt models/best.pt \
+  --onnx models/best.onnx \
+  --num-patches 32
+```
+
+The check runs both backends on CPU, compares binary logits and ray maps with `rtol=1e-4` / `atol=1e-5`, and requires pixel-identical final StarDist instance masks.
+
 ## Evaluation
 
 Evaluate the best checkpoint on all test patches:
